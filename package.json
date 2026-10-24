@@ -1,0 +1,47 @@
+{
+  "name": "eve-esi-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for EVE Online ESI: SSO auth, multiple characters, and model-friendly tools that resolve names, attributes and EFT fittings in a single call.",
+  "type": "module",
+  "bin": {
+    "eve-esi-mcp": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch",
+    "start": "node dist/index.js",
+    "test": "node --test \"dist/test/*.test.js\"",
+    "prepare": "npm run build"
+  },
+  "engines": {
+    "node": ">=22.13"
+  },
+  "keywords": [
+    "eve-online",
+    "esi",
+    "mcp",
+    "model-context-protocol"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/apettey/eve-esi-mcp.git"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "jose": "^6.2.13",
+    "yauzl": "^3.4.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/yauzl": "^3.4.0",
+    "typescript": "^7.0.2"
+  }
+}
