@@ -1,4 +1,5 @@
 import { COMPATIBILITY_DATE, ESI_BASE, type Config } from "../config.js";
+import { SCOPE_PRESETS } from "../auth/scopes.js";
 import type { Sso } from "../auth/sso.js";
 import type { StoredCharacter } from "../auth/store.js";
 import { UserError, log, mapLimit } from "../util.js";
@@ -48,9 +49,12 @@ export class Esi {
 
   requireScope(character: StoredCharacter, scope: string) {
     if (!character.scopes.includes(scope)) {
+      // Point at the smallest preset that actually contains the scope (corporation scopes are only in "full").
+      const preset = ["standard", "full"].find((p) => SCOPE_PRESETS[p].includes(scope));
       throw new UserError(
-        `${character.name} has not granted the scope "${scope}". Call character_login (scopes preset "standard" or "full", ` +
-          `or include "${scope}") to re-authorize this character.`,
+        `${character.name} has not granted the scope "${scope}". Call character_login ` +
+          (preset ? `with the "${preset}" scope preset` : `with scopes including "${scope}"`) +
+          " to re-authorize this character.",
       );
     }
   }

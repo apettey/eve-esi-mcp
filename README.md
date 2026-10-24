@@ -151,8 +151,13 @@ node dist/index.js characters       # list stored characters
 ```bash
 npm run build    # compile TypeScript to dist/
 npm test         # unit tests (SDE-backed tests run when an SDE index exists)
+node scripts/smoke.mjs '[["system_info",{"system":"Jita"}]]'   # call tools on the built server over stdio
 node dist/index.js sde-update   # force a static data refresh
 ```
+
+When working on this repo with Claude Code, [`CLAUDE.md`](CLAUDE.md) and the project skills in
+[`.claude/skills/`](.claude/skills/) describe how tools should be designed (`adding-eve-tools`) and safely tested
+against a live character (`live-testing-eve-esi`).
 
 The server targets ESI compatibility date `2026-08-18` (`COMPATIBILITY_DATE` in [`src/config.ts`](src/config.ts)). Check `/meta/changelog` before you bump it.
 
