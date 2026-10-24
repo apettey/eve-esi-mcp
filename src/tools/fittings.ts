@@ -6,6 +6,7 @@ import { CATEGORY, type Sde } from "../sde/db.js";
 import { fitFromFlaggedItems, parseEft, toEft, toEsiItems, type Fit } from "../fit/model.js";
 import { renderFit } from "../fit/render.js";
 import { EVE_FIT_NOT_CONFIGURED, fitStats } from "../fit/evefit.js";
+import { loadCargoAmmo } from "../fit/ammo.js";
 import { loadSkills, type CharacterSkills } from "../skills.js";
 import { UserError, log, norm } from "../util.js";
 import { READ_ONLY, characterParam, handler, reply } from "./helpers.js";
@@ -18,6 +19,14 @@ export interface EsiFitting {
   ship_type_id: number;
   items: Array<{ type_id: number; flag: string; quantity: number }>;
 }
+
+const loadAmmoParam = z
+  .boolean()
+  .optional()
+  .describe(
+    "For engine stats only: load empty turrets/launchers with compatible ammo from the fit's cargo (default true), " +
+      "so DPS isn't 0 for saved fittings, which keep ammo in cargo.",
+  );
 
 const detailParam = z
   .enum(["none", "summary", "full"])
@@ -69,13 +78,23 @@ async function activeImplants(ctx: Ctx, c: StoredCharacter): Promise<number[] | 
 }
 
 /** Engine stats for renderFit (`stats`, or `statsNote` saying why not); never throws. */
-async function engineStats(ctx: Ctx, sde: Sde, fit: Fit, skills: CharacterSkills | undefined, c: StoredCharacter | undefined) {
+async function engineStats(
+  ctx: Ctx, sde: Sde, fit: Fit, skills: CharacterSkills | undefined, c: StoredCharacter | undefined,
+  ammo: { load?: boolean; cargo?: Fit["cargo"] } = {},
+) {
   const engine = fitStats();
   if (!engine) return { statsNote: EVE_FIT_NOT_CONFIGURED };
   try {
     // Implants listed in the fit itself win over the character's current ones.
     const implants = skills && c && !fit.implants.length ? await activeImplants(ctx, c) : undefined;
-    return { stats: await engine.compute({ eft: toEft(sde, fit), skills, characterName: c?.name, implants }) };
+    // Only the engine's copy gets cargo ammo loaded; the displayed slots/EFT/DNA stay as the fit really is.
+    const loaded = ammo.load !== false ? loadCargoAmmo(sde, fit, ammo.cargo) : undefined;
+    return {
+      stats: await engine.compute({
+        eft: toEft(sde, loaded?.fit ?? fit), skills, characterName: c?.name, implants,
+        assumedCharges: loaded?.assumed, unloadedWeapons: loaded?.unloaded,
+      }),
+    };
   } catch (err) {
     log("eve-fit stats failed:", (err as Error).message);
     return { statsNote: `Accurate stats unavailable: eve-fit failed (${(err as Error).message}).` };
@@ -161,10 +180,11 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
         character: characterParam,
         attributes: detailParam,
         check_skills: z.boolean().optional().describe("Check skills of the character (default true)."),
+        load_cargo_ammo: loadAmmoParam,
       },
       annotations: READ_ONLY,
     },
-    handler(async ({ fittings, character, attributes, check_skills }) => {
+    handler(async ({ fittings, character, attributes, check_skills, load_cargo_ammo }) => {
       const c = ctx.character(character);
       const sde = await ctx.sde();
       const all = await savedFittings(ctx, c);
@@ -184,7 +204,10 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
         const fit = fitFromFlaggedItems(sde, f.name, f.ship_type_id, f.items, f.description);
         rendered.push({
           fitting_id: f.fitting_id,
-          ...renderFit(sde, fit, { detail: attributes, skills, characterName: c.name, ...(await engineStats(ctx, sde, fit, skills, c)) }),
+          ...renderFit(sde, fit, {
+            detail: attributes, skills, characterName: c.name,
+            ...(await engineStats(ctx, sde, fit, skills, c, { load: load_cargo_ammo })),
+          }),
         });
       }
       return reply(
@@ -207,10 +230,11 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
         character: characterParam,
         attributes: detailParam,
         include_cargo: z.boolean().optional().describe("Include cargo/other holds (default true)."),
+        load_cargo_ammo: loadAmmoParam,
       },
       annotations: READ_ONLY,
     },
-    handler(async ({ ship, character, attributes, include_cargo }) => {
+    handler(async ({ ship, character, attributes, include_cargo, load_cargo_ammo }) => {
       const c = ctx.character(character);
       const sde = await ctx.sde();
       const index = await loadAssets(ctx, c);
@@ -247,14 +271,18 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
         }
         if (!shipItem) throw new UserError(`No assembled ship matching "${ref}" in ${c.name}'s assets. Try assets with mode 'ships'.`);
       }
-      const contents = (index.children.get(shipItem.item_id) ?? [])
-        .filter((x) => include_cargo !== false || /Slot\d|DroneBay|FighterBay/.test(x.location_flag))
-        .map((x) => ({ type_id: x.type_id, flag: x.location_flag, quantity: x.quantity }));
+      const all = (index.children.get(shipItem.item_id) ?? []).map((x) => ({ type_id: x.type_id, flag: x.location_flag, quantity: x.quantity }));
+      const contents = all.filter((x) => include_cargo !== false || /Slot\d|DroneBay|FighterBay/.test(x.flag));
+      // Ammo for engine stats comes from the real cargo hold even when it is hidden from the output.
+      const cargo = all.filter((x) => x.flag === "Cargo");
       const name = index.names.get(shipItem.item_id) ?? sde.typeName(shipItem.type_id);
       const fit: Fit = fitFromFlaggedItems(sde, name, shipItem.type_id, contents);
       const skills = await skillsFor(ctx, c, true);
       const loc = index.roots.get(rootOf(index, shipItem).location_id);
-      const rendered = renderFit(sde, fit, { detail: attributes, skills, characterName: c.name, ...(await engineStats(ctx, sde, fit, skills, c)) });
+      const rendered = renderFit(sde, fit, {
+        detail: attributes, skills, characterName: c.name,
+        ...(await engineStats(ctx, sde, fit, skills, c, { load: load_cargo_ammo, cargo })),
+      });
       return reply(
         {
           character: c.name,
@@ -281,15 +309,19 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
         eft: z.string().describe("EFT text starting with [Ship, Name]."),
         character: characterParam,
         attributes: detailParam,
+        load_cargo_ammo: loadAmmoParam,
       },
       annotations: READ_ONLY,
     },
-    handler(async ({ eft, character, attributes }) => {
+    handler(async ({ eft, character, attributes, load_cargo_ammo }) => {
       const sde = await ctx.sde();
       const { fit, warnings } = parseEft(sde, eft);
       const c = ctx.maybeCharacter(character);
       const skills = await skillsFor(ctx, c, true);
-      const rendered = renderFit(sde, fit, { detail: attributes, skills, characterName: c?.name, ...(await engineStats(ctx, sde, fit, skills, c)) });
+      const rendered = renderFit(sde, fit, {
+        detail: attributes, skills, characterName: c?.name,
+        ...(await engineStats(ctx, sde, fit, skills, c, { load: load_cargo_ammo })),
+      });
       return reply({ warnings: warnings.length ? warnings : undefined, ...rendered }, { texts: [rendered.eft] });
     }),
   );
