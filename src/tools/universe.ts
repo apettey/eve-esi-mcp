@@ -277,7 +277,8 @@ export function registerUniverseTools(server: McpServer, ctx: Ctx) {
       title: "Solar system details",
       description:
         "Details for a solar system: security, constellation/region, NPC stations, gate neighbours with security, sovereignty, " +
-        "ship/pod/NPC kills and jumps in the last hour, and jump distance to the major trade hubs. Use 'current' for the character's location.",
+        "ship/pod/NPC kills and jumps in the last hour, and jump distance to the major trade hubs. Use 'current' for the character's location. " +
+        "For wormhole (J-space) systems: class, system effect with its modifiers, and static wormholes with destination, mass and lifetime.",
       inputSchema: {
         system: z.string().describe("System name or id, or 'current' for the character's current system."),
         character: characterParam,
@@ -303,21 +304,43 @@ export function registerUniverseTools(server: McpServer, ctx: Ctx) {
       const sovEntry = sov?.solar_systems?.find((x: any) => x.solar_system_id === id);
       // claim is one of {faction: {...}}, {alliance: {...}} or {unclaimed: true}.
       const sovOwner = sovEntry?.claim ? await ctx.resolver.enrich(sovEntry.claim) : undefined;
-      const dist = sde.jumpDistances(id, 60);
+      // J-space has no stargates, so neighbours and gate distances only apply to known space.
+      const wormhole = sde.wormholeSystem(id);
+      const dist = wormhole ? null : sde.jumpDistances(id, 60);
       return reply({
         ...sde.systemSummary(id),
+        wormhole: wormhole ?? undefined,
         stations: sde.stationsInSystem(id).map((s) => s.name),
-        neighbours: sde.neighbours(id).map((n) => {
+        neighbours: wormhole ? undefined : sde.neighbours(id).map((n) => {
           const s = sde.systemSummary(n)!;
           return `${s.name} (${s.security}${s.region !== sde.systemSummary(id)!.region ? `, ${s.region}` : ""})`;
         }),
         sovereignty: sovOwner,
         last_hour: { ship_kills: k?.ship_kills ?? 0, pod_kills: k?.pod_kills ?? 0, npc_kills: k?.npc_kills ?? 0, jumps: j?.ship_jumps ?? 0 },
-        jumps_to_trade_hubs: Object.fromEntries(
+        jumps_to_trade_hubs: dist ? Object.fromEntries(
           Object.entries(TRADE_HUBS).map(([hub, h]) => [hub, dist.get(h.systemId) ?? ">60 or unreachable by gates"]),
-        ),
+        ) : undefined,
         errors: Object.keys(errors).length ? errors : undefined,
       });
+    }),
+  );
+
+  server.registerTool(
+    "wormhole_type",
+    {
+      title: "Wormhole type lookup",
+      description:
+        "Looks up wormhole types by their signature code (e.g. K162, H296, D845): destination class, max mass per jump, total mass, " +
+        "mass regeneration, lifetime, and the classes of systems that have it as a static.",
+      inputSchema: {
+        codes: z.array(z.string()).min(1).max(20).describe("Wormhole codes, e.g. ['H296', 'K162']."),
+      },
+      annotations: READ_ONLY,
+    },
+    handler(async ({ codes }) => {
+      const sde = await ctx.sde();
+      const out = codes.map((c) => sde.wormholeType(c) ?? { code: c, error: `Unknown wormhole type "${c}".` });
+      return reply(out.length === 1 ? out[0] : { wormholes: out });
     }),
   );
 

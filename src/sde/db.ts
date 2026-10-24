@@ -1,5 +1,9 @@
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 import { norm, round } from "../util.js";
+import { WORMHOLE_STATICS } from "./wormhole-statics.js";
+import {
+  WH_ATTR, WORMHOLE_GROUP, describeEffectModifiers, effectName, isWormholeRegion, massText, wormholeClassName, wormholeCode,
+} from "./wormholes.js";
 
 export const CATEGORY = {
   ship: 6,
@@ -57,6 +61,18 @@ export interface TypeRow {
   description: string | null;
   slot: string | null;
   hardpoint: string | null;
+}
+
+export interface SystemRow {
+  id: number;
+  name: string;
+  constellation_id: number;
+  region_id: number;
+  security: number;
+  security_class: string | null;
+  wormhole_class_id: number | null;
+  effect_beacon_id: number | null;
+  visual_effect: string | null;
 }
 
 export interface AttributeDef {
@@ -123,6 +139,7 @@ export class Sde {
   private units?: Map<number, string | null>;
   private attrCategories?: Map<number, string>;
   private typeCache = new Map<number, TypeRow | null>();
+  private staticClasses?: Map<string, Set<string>>;
 
   constructor(path: string) {
     this.db = new DatabaseSync(path, { readOnly: true });
@@ -373,7 +390,7 @@ export class Sde {
 
   // ---------- universe ----------
 
-  system(id: number): { id: number; name: string; constellation_id: number; region_id: number; security: number; security_class: string | null } | null {
+  system(id: number): SystemRow | null {
     return (this.q("SELECT * FROM systems WHERE id = ?").get(id) as any) ?? null;
   }
 
@@ -385,9 +402,76 @@ export class Sde {
       name: s.name,
       security: displaySecurity(s.security),
       security_band: s.region_id >= 11000000 ? "wormhole" : securityBand(s.security),
+      wormhole_class: isWormholeRegion(s.region_id) ? wormholeClassName(s.wormhole_class_id) ?? undefined : undefined,
       constellation: this.constellationName(s.constellation_id),
       region: this.regionName(s.region_id),
     };
+  }
+
+  /** System effect with its modifiers and the statics of a J-space system (class is in systemSummary); null elsewhere. */
+  wormholeSystem(id: number) {
+    const s = this.system(id);
+    if (!s || !isWormholeRegion(s.region_id)) return null;
+    const beacon = s.effect_beacon_id ? this.type(s.effect_beacon_id) : null;
+    const defs = this.attributeDefs();
+    const modifiers = beacon
+      ? describeEffectModifiers([...this.typeAttributes(beacon.id)].map(([attr, value]) => ({
+        name: defs.get(attr)?.name ?? String(attr), display_name: defs.get(attr)?.display_name ?? null, value,
+      })))
+      : [];
+    return {
+      shattered: s.visual_effect === "SHATTEREDWORMHOLE_OVERLAY" || undefined,
+      effect: beacon ? { name: effectName(beacon.name), modifiers } : "none",
+      statics: (WORMHOLE_STATICS[id]?.split(" ") ?? []).map((code) => this.wormholeType(code)?.summary ?? code),
+    };
+  }
+
+  /** Wormhole type by code ("H296", "Wormhole K162"): destination class, mass limits and lifetime. */
+  wormholeType(ref: string) {
+    const code = wormholeCode(ref);
+    if (!code) return null;
+    // A few codes (C729, F216) exist as several types; prefer one that carries the attributes.
+    const row = this.q(`SELECT id FROM types WHERE group_id = ? AND name = ?
+      ORDER BY (SELECT count(*) FROM type_attributes WHERE type_id = types.id) DESC, id LIMIT 1`)
+      .get(WORMHOLE_GROUP, `Wormhole ${code}`) as { id: number } | undefined;
+    if (!row) return null;
+    const a = this.typeAttributes(row.id);
+    const target = a.get(WH_ATTR.targetClass);
+    const staticIn = [...(this.staticSourceClasses().get(code) ?? [])];
+    if (target == null) {
+      return {
+        code, type_id: row.id, leads_to: "anywhere",
+        summary: `${code}: exit side of a wormhole opened from the other system; its mass and lifetime are those of the wormhole on the other side`,
+      };
+    }
+    const jump = a.get(WH_ATTR.maxJumpMass) ?? 0;
+    const total = a.get(WH_ATTR.maxStableMass) ?? 0;
+    const regen = a.get(WH_ATTR.massRegeneration) ?? 0;
+    const hours = round((a.get(WH_ATTR.maxStableTime) ?? 0) / 60, 1);
+    const leadsTo = wormholeClassName(target)!;
+    return {
+      code,
+      type_id: row.id,
+      leads_to: leadsTo,
+      max_jump_mass_kg: jump,
+      total_mass_kg: total,
+      mass_regeneration_kg: regen || undefined,
+      lifetime_hours: hours,
+      static_in: staticIn.length ? staticIn : undefined,
+      summary: `${code} → ${leadsTo}, ${massText(jump)} per jump, ${massText(total)} total${regen ? ` (regenerates ${massText(regen)})` : ""}, ${hours}h`,
+    };
+  }
+
+  /** Classes of the J-space systems that have each wormhole code as a static. */
+  private staticSourceClasses(): Map<string, Set<string>> {
+    if (this.staticClasses) return this.staticClasses;
+    const map = new Map<string, Set<string>>();
+    const rows = this.q("SELECT id, wormhole_class_id FROM systems WHERE region_id BETWEEN 11000000 AND 11999999 ORDER BY wormhole_class_id").all() as any[];
+    for (const r of rows) for (const code of WORMHOLE_STATICS[r.id]?.split(" ") ?? []) {
+      if (!map.has(code)) map.set(code, new Set());
+      map.get(code)!.add(wormholeClassName(r.wormhole_class_id) ?? "?");
+    }
+    return (this.staticClasses = map);
   }
 
   systemIdByName(name: string): number | null {
