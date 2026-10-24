@@ -10,7 +10,7 @@ import { UserError, norm } from "../util.js";
 import { READ_ONLY, characterParam, handler, reply } from "./helpers.js";
 import { loadAssets, pathOf, rootOf } from "./assets.js";
 
-interface EsiFitting {
+export interface EsiFitting {
   fitting_id: number;
   name: string;
   description: string;
@@ -32,8 +32,34 @@ async function skillsFor(ctx: Ctx, c: StoredCharacter | undefined, wanted: boole
   }
 }
 
+/** Fittings saved/deleted by this process that ESI's cached list may not show yet. */
+export interface PendingFittingWrites {
+  saved: EsiFitting[];
+  deleted: Set<number>;
+  until: number;
+}
+
+// ESI serves the fittings list from a ~5 minute server-side cache, so a fit saved or deleted here would otherwise be
+// missing from (or still in) fittings_list, fitting_get and fitting_delete for that long.
+const PENDING_MS = 10 * 60_000;
+const pendingWrites = new Map<number, PendingFittingWrites>();
+
+function notePending(characterId: number, apply: (p: PendingFittingWrites) => void) {
+  let p = pendingWrites.get(characterId);
+  if (!p || p.until < Date.now()) pendingWrites.set(characterId, (p = { saved: [], deleted: new Set(), until: 0 }));
+  p.until = Date.now() + PENDING_MS;
+  apply(p);
+}
+
+export function applyPendingWrites(fits: EsiFitting[], p: PendingFittingWrites | undefined, now = Date.now()): EsiFitting[] {
+  if (!p || p.until < now) return fits;
+  const known = new Set(fits.map((f) => f.fitting_id));
+  return [...fits, ...p.saved.filter((f) => !known.has(f.fitting_id))].filter((f) => !p.deleted.has(f.fitting_id));
+}
+
 async function savedFittings(ctx: Ctx, c: StoredCharacter): Promise<EsiFitting[]> {
-  return ctx.esi.get<EsiFitting[]>(`/characters/${c.id}/fittings`, { character: c, scope: "esi-fittings.read_fittings.v1" });
+  const fits = await ctx.esi.get<EsiFitting[]>(`/characters/${c.id}/fittings`, { character: c, scope: "esi-fittings.read_fittings.v1" });
+  return applyPendingWrites(fits, pendingWrites.get(c.id));
 }
 
 function matchFittings(sde: import("../sde/db.js").Sde, fits: EsiFitting[], ref: string | number): EsiFitting[] {
@@ -246,7 +272,8 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
       title: "Save a fitting in-game",
       description:
         "Saves an EFT fit to the character's in-game saved fittings (requires esi-fittings.write_fittings.v1). Names are resolved " +
-        "from static data; loaded charges are moved to cargo because ESI cannot store them per slot. Returns the new fitting_id. " +
+        "from static data. ESI cannot store charges per slot, so loaded charges are dropped (with a warning) unless they are also in " +
+        "the cargo section. Returns the new fitting_id. " +
         "Confirm with the user before saving.",
       inputSchema: {
         eft: z.string().describe("EFT text starting with [Ship, Name]."),
@@ -276,6 +303,7 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
       const res = await ctx.esi.post<{ fitting_id: number }>(`/characters/${c.id}/fittings`, body, {
         character: c, scope: "esi-fittings.write_fittings.v1",
       });
+      notePending(c.id, (p) => p.saved.push({ fitting_id: res.fitting_id, ...body }));
       return reply({
         saved: true,
         character: c.name,
@@ -311,6 +339,7 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
       await ctx.esi.request("DELETE", `/characters/${c.id}/fittings/${matches[0].fitting_id}`, {
         character: c, scope: "esi-fittings.write_fittings.v1",
       });
+      notePending(c.id, (p) => p.deleted.add(matches[0].fitting_id));
       return reply({ deleted: matches[0].name, ship: sde.typeName(matches[0].ship_type_id), fitting_id: matches[0].fitting_id });
     }),
   );

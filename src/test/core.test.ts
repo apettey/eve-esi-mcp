@@ -8,6 +8,7 @@ import { fitFromFlaggedItems, numericFlagToName, parseEft, toDna, toEft, toEsiIt
 import { parseItemList } from "../market.js";
 import { spForLevel } from "../skills.js";
 import { compact, duration, isk } from "../util.js";
+import { applyPendingWrites } from "../tools/fittings.js";
 
 test("skill point curve", () => {
   assert.equal(spForLevel(1, 1), 250);
@@ -35,6 +36,14 @@ test("formatting helpers", () => {
   assert.equal(isk(1_234_567_890), "1.23b ISK");
   assert.equal(duration(90 * 60_000), "1h 30m");
   assert.deepEqual(compact({ a: 1, b: null, c: [], d: { e: undefined, f: 2 } }), { a: 1, d: { f: 2 } });
+});
+
+test("fittings written by this process are overlaid on ESI's cached list", () => {
+  const fit = (id: number) => ({ fitting_id: id, name: `Fit ${id}`, description: "", ship_type_id: 587, items: [] });
+  const pending = { saved: [fit(3)], deleted: new Set([1]), until: 1000 };
+  assert.deepEqual(applyPendingWrites([fit(1), fit(2)], pending, 500).map((f) => f.fitting_id), [2, 3]);
+  assert.deepEqual(applyPendingWrites([fit(2), fit(3)], pending, 500).map((f) => f.fitting_id), [2, 3]);
+  assert.deepEqual(applyPendingWrites([fit(1), fit(2)], pending, 2000).map((f) => f.fitting_id), [1, 2]);
 });
 
 // The tests below need the local SDE index (run the server or `eve-esi-mcp sde-update` once).

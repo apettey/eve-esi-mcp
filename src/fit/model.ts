@@ -200,7 +200,7 @@ export function toDna(fit: Fit): string {
   return `${fit.ship_type_id}:${parts.join(":")}::`;
 }
 
-/** Converts a Fit back into ESI's saved-fitting item list. Loaded charges go to cargo (ESI cannot store them per slot). */
+/** Converts a Fit back into ESI's saved-fitting item list. Loaded charges are left out (ESI cannot store them per slot). */
 export function toEsiItems(fit: Fit): Array<{ type_id: number; flag: string; quantity: number }> {
   const items: Array<{ type_id: number; flag: string; quantity: number }> = [];
   for (const kind of Object.keys(fit.slots) as SlotKind[]) {
