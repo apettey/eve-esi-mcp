@@ -140,7 +140,9 @@ async function eachLine(zip: yauzl.ZipFile, entries: Map<string, yauzl.Entry>, n
 
 export async function buildSde(home: string, build: number, userAgent: string): Promise<string> {
   const zipPath = join(home, `sde-${build}.zip`);
-  const dbPath = join(home, `sde-${build}.sqlite`);
+  // The schema version is part of the name so an upgrade never has to replace a file another
+  // server process still has open (Windows refuses to rename over it).
+  const dbPath = join(home, `sde-${build}-s${SDE_SCHEMA_VERSION}.sqlite`);
   const tmpPath = dbPath + ".tmp";
   if (!existsSync(zipPath) || statSync(zipPath).size === 0) {
     log(`Downloading SDE build ${build} (~100 MB)...`);
@@ -301,7 +303,7 @@ export async function buildSde(home: string, build: number, userAgent: string): 
 /** Removes SDE databases and archives other than the one in use. */
 export function cleanupOldSde(home: string, keep: string) {
   for (const f of readdirSync(home)) {
-    if (/^sde-\d+\.(sqlite|zip)(\.tmp|\.part)?$/.test(f) && join(home, f) !== keep) {
+    if (/^sde-\d+(-s\d+)?\.(sqlite|zip)(\.tmp|\.part)?$/.test(f) && join(home, f) !== keep) {
       try { rmSync(join(home, f), { force: true }); } catch { /* in use on Windows; retry next start */ }
     }
   }
