@@ -33,7 +33,7 @@ An [MCP](https://modelcontextprotocol.io) server for EVE Online's [ESI API](http
   "slots": { "high": [{ "slot": "high:0", "module": "200mm AutoCannon II", "charge": "Republic Fleet EMP S" }, ...],
              "low":  [..., { "slot": "low:3", "module": "(empty)" }] },
   "resources": { "cpu": { "used": "116 tf", "available": "130 tf", "percent": 89.2 }, "turret_hardpoints": "3/3", ... },
-  "stats": { "pilot": "eve-esi-mcp 90000001", "skills_used": "My Pilot's trained skills (active levels).",   // with eve-fit only
+  "stats": { "pilot": "custom skills", "skills_used": "My Pilot's trained skills (active levels) with 3 active implant(s).",   // with eve-fit only
              "offense": { "dps": 142.3, "volley": 213.5, ... }, "defense": { "ehp": 4120, "resists_percent": { ... } },
              "capacitor": { "stable": false, "lasts_s": 95 }, "navigation": { "max_speed_m_s": 3240.5, "align_time_s": 4.69 },
              "fitting": { "cpu_tf": { "used": 135.8, "total": 162.5, "percent": 83.5 }, ... } },
@@ -59,9 +59,9 @@ The EFT text is also returned as a separate text block, so it can be copied stra
 - fitting: CPU/PG/calibration/drone usage after skills, plus slot and hardpoint usage
 - any fitting issues and missing skills
 
-eve-esi-mcp starts eve-fit as a child MCP server the first time a fitting tool needs it, then reuses it. For each fit it loads the EFT, reads the stats and closes the fit. If a character with the skills scope is involved, its active skill levels are saved as an eve-fit custom pilot named `eve-esi-mcp <character id>`. The pilot is re-saved only when the skills change, so the stats reflect what that character can actually fly. With no character, the stats use `All 5`. The `pilot` and `skills_used` fields say which skills were used. If eve-fit isn't configured or fails, `stats` is left out and a short `stats_note` explains why. The rest of the output is unaffected.
+eve-esi-mcp starts eve-fit as a child MCP server the first time a fitting tool needs it, then reuses it. Each fit is a single stateless `evaluate_fit` call (contract `eve-fit/evaluate_fit@1`). If a character with the skills scope is involved, its active skill levels are sent with the call, along with its active implants if the token has `esi-clones.read_implants.v1` and the fit lists no implants of its own. So the stats reflect what that character can actually fly. With no character, the stats use `All 5`. The `pilot` and `skills_used` fields say which skills were used. If eve-fit isn't configured, is too old to have `evaluate_fit`, or fails, `stats` is left out and a short `stats_note` explains why. The rest of the output is unaffected.
 
-To enable it, set `EVE_FIT_DIR` to an eve-fit-mcp checkout that has a `.venv`, or set `EVE_FIT_COMMAND`/`EVE_FIT_ARGS` to launch it some other way. A checkout named `eve-fit-mcp` next to this package is detected automatically. The first start can take a while, because Pyfa loads its game data.
+To enable it, set `EVE_FIT_DIR` to an eve-fit-mcp checkout (commit 03e5b41 or newer) that has a `.venv`, or set `EVE_FIT_COMMAND`/`EVE_FIT_ARGS` to launch it some other way. A checkout named `eve-fit-mcp` next to this package is detected automatically. The very first start builds eve-fit's game data and item index, which takes about 30 s. Later starts take a few seconds, and each fit then takes milliseconds. eve-esi-mcp keeps the only ESI tokens; eve-fit's own ESI login isn't used.
 
 ## Setup
 
@@ -141,7 +141,7 @@ node dist/index.js characters       # list stored characters
 - Refresh tokens are stored in `characters.json` in the data directory, with owner-only file permissions where the OS supports them. Anyone who can read that file can access the characters' data within the granted scopes. Use `character_logout` to revoke a token.
 - `fitting_save`, `fitting_delete`, `mail_send`, `ui_action`, `route_plan` with `set_destination`, and non-GET `esi_request` calls change things in your account or game client. The tool descriptions tell the model to confirm with you first.
 - Fitting resource numbers in `resources` come from static data, so skills, rigs and module bonuses aren't applied. For exact stats, configure eve-fit (see above).
-- With eve-fit enabled, the skill levels of characters whose fits you analyze are written to eve-fit's pilot store (`data/pilots/` in the eve-fit checkout). No tokens are shared.
+- With eve-fit enabled, a character's skill levels and implant type ids are sent to the local eve-fit process for each fit. Nothing is stored there, and no tokens are shared.
 
 ## Development
 

@@ -1,22 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEFAULT_PILOT, FitStats, eveFitLaunch, formatStats, type FitEngine } from "../fit/evefit.js";
-import type { Sde } from "../sde/db.js";
+import { CONTRACT, FitStats, eveFitLaunch, formatStats, type FitEngine } from "../fit/evefit.js";
 import type { CharacterSkills } from "../skills.js";
 
-// eve-fit itself is not needed: a fake engine records calls and answers like eve-fit's tools.
-const NAMES: Record<number, string> = { 3300: "Gunnery", 3426: "CPU Management", 99999: "Brand New Skill" };
-const sde = { typeName: (id: number) => NAMES[id] ?? `#${id}` } as unknown as Sde;
-
+// eve-fit itself is not needed: a fake engine records calls and answers per contract eve-fit/evaluate_fit@1.
 const STATS = {
-  ship: "Rifter", valid: true, issues: [], missing_skills: {},
   dps_total: 55.123, dps_weapon: 55.123, dps_drone: 0, volley: 83.2,
   weapon_optimal: 750, weapon_falloff: 9675, weapon_tracking: 393.75,
   ehp_total: 2955.4, ehp_shield: 887, ehp_armor: 980, ehp_hull: 1088, hp_total: 1563,
   resist_shield_em: 0.125, resist_shield_thermal: 0.3, resist_shield_kinetic: 0.475, resist_shield_explosive: 0.5625,
   resist_armor_em: 0.66, resist_armor_thermal: 0.448, resist_armor_kinetic: 0.363, resist_armor_explosive: 0.235,
   resist_hull_em: 0.598, resist_hull_thermal: 0.598, resist_hull_kinetic: 0.598, resist_hull_explosive: 0.598,
-  damage_profile: { em: 25, thermal: 25, kinetic: 25, explosive: 25 },
   tank_sustained: 4.7, tank_burst: 4.7, shield_regen: 4.7, remote_rep: 0,
   cap_capacity: 250, cap_stable: 0, cap_stable_pct: 0, cap_lasts_s: 120.4, cap_delta: -0.83,
   max_speed: 3240.5, align_time: 4.69, signature: 201.3, warp_speed: 5,
@@ -26,42 +20,37 @@ const STATS = {
   slots: { low: { used: 2, total: 4 } }, turret_hardpoints_free: 2, launcher_hardpoints_free: 2,
 };
 
+const RESULT = {
+  contract: CONTRACT, valid: true, issues: [], pilot_used: "All 5", ship: "Rifter",
+  engine: { name: "eve-fit-mcp", pyfa_version: "v2.62.3" }, stats: STATS, units: {}, missing_skills: [],
+};
+
 class FakeEngine implements FitEngine {
   calls: Array<[string, any]> = [];
-  rejectSkills = new Set<string>();
-  failSave = false;
+  reply: any = RESULT;
+  error?: string;
 
   async call(tool: string, args: Record<string, unknown>) {
     this.calls.push([tool, structuredClone(args)]);
-    switch (tool) {
-      case "save_pilot": {
-        if (this.failSave) throw new Error("eve-fit save_pilot: disk full");
-        const bad = Object.keys(args.skills as object).find((s) => this.rejectSkills.has(s));
-        if (bad) throw new Error(`eve-fit save_pilot: Unknown skill '${bad}'`);
-        return { name: args.name };
-      }
-      case "load_fit": return { fit_id: 7 };
-      case "get_stats": return STATS;
-      case "close_fit": return { closed: args.fit_id };
-      default: throw new Error(`unexpected tool ${tool}`);
-    }
+    if (this.error) throw new Error(this.error);
+    assert.equal(tool, "evaluate_fit");
+    return this.reply;
   }
-  tools() { return this.calls.map((c) => c[0]); }
 }
 
 const skills: CharacterSkills = {
   levels: new Map([
     [3300, { trained: 5, active: 5, sp: 0 }],
     [3426, { trained: 5, active: 4, sp: 0 }], // alpha-limited: active level wins
-    [99999, { trained: 1, active: 1, sp: 0 }],
     [12345, { trained: 0, active: 0, sp: 0 }],
   ]),
   total_sp: 0, unallocated_sp: 0, attributes: {},
 };
-const character = { id: 90000001, name: "Test Pilot" };
 
 test("stats are grouped and rounded", () => {
-  const s: any = formatStats(STATS, { pilot: DEFAULT_PILOT, pilotNote: "All 5" });
+  const s: any = formatStats(RESULT, { skillsUsed: "All 5" });
+  assert.equal(s.pilot, "All 5");
+  assert.match(s.source, /Pyfa v2\.62\.3/);
   assert.equal(s.offense.dps, 55.1);
   assert.equal(s.defense.ehp, 2955);
   assert.equal(s.defense.resists_percent.shield.explosive, 56.3);
@@ -72,48 +61,47 @@ test("stats are grouped and rounded", () => {
   assert.equal(s.mining_yield_m3_s, undefined);
 });
 
-test("without a character, stats use All 5 and the fit is closed", async () => {
+test("stable capacitor reports the stable level, not 1e9 seconds", () => {
+  const s: any = formatStats({ ...RESULT, stats: { ...STATS, cap_stable: 1, cap_stable_pct: 81.2, cap_lasts_s: 1e9 } }, { skillsUsed: "" });
+  assert.deepEqual(s.capacitor, { capacity_gj: 250, stable: true, stable_at_percent: 81.2, delta_gj_s: -0.83 });
+});
+
+test("without a character, evaluate_fit gets only the EFT (All 5)", async () => {
   const engine = new FakeEngine();
-  const s: any = await new FitStats(engine).compute(sde, { eft: "[Rifter, T]" });
-  assert.deepEqual(engine.tools(), ["load_fit", "get_stats", "close_fit"]);
-  assert.equal(engine.calls[0][1].pilot, "All 5");
-  assert.equal(s.pilot, "All 5");
+  const s: any = await new FitStats(engine).compute({ eft: "[Rifter, T]" });
+  assert.deepEqual(engine.calls, [["evaluate_fit", { eft: "[Rifter, T]" }]]);
   assert.match(s.skills_used, /level 5/);
 });
 
-test("character skills become a cached custom pilot", async () => {
+test("character skills and implants are passed inline", async () => {
   const engine = new FakeEngine();
-  const fs = new FitStats(engine);
-  const s: any = await fs.compute(sde, { eft: "[Rifter, T]", skills, character });
-  const [tool, args] = engine.calls[0];
-  assert.equal(tool, "save_pilot");
-  assert.deepEqual(args, {
-    name: FitStats.pilotName(character.id), base_level: 0, replace: true,
-    skills: { Gunnery: 5, "CPU Management": 4, "Brand New Skill": 1 },
-  });
-  assert.equal(engine.calls[1][1].pilot, FitStats.pilotName(character.id));
-  assert.match(s.skills_used, /Test Pilot/);
-
-  await fs.compute(sde, { eft: "[Rifter, T]", skills, character });
-  assert.equal(engine.tools().filter((t) => t === "save_pilot").length, 1, "unchanged skills are not re-saved");
+  engine.reply = {
+    ...RESULT, pilot_used: "custom skills",
+    missing_skills: [{ item: "Gyrostabilizer II", skill: "Weapon Upgrades", required: 4, have: 3 }],
+  };
+  const s: any = await new FitStats(engine).compute({ eft: "[Rifter, T]", skills, characterName: "Test Pilot", implants: [13219] });
+  assert.deepEqual(engine.calls[0][1], { eft: "[Rifter, T]", skills: { "3300": 5, "3426": 4 }, implants: [13219] });
+  assert.equal(s.pilot, "custom skills");
+  assert.match(s.skills_used, /Test Pilot's trained skills .* 1 active implant/);
+  assert.equal(s.missing_skills[0].skill, "Weapon Upgrades");
 });
 
-test("skills eve-fit does not know are dropped and reported", async () => {
+test("an unparseable fit comes back as valid=false with issues only", async () => {
   const engine = new FakeEngine();
-  engine.rejectSkills.add("Brand New Skill");
-  const s: any = await new FitStats(engine).compute(sde, { eft: "[Rifter, T]", skills, character });
-  assert.deepEqual(engine.tools(), ["save_pilot", "save_pilot", "load_fit", "get_stats", "close_fit"]);
-  assert.deepEqual(engine.calls[1][1].skills, { Gunnery: 5, "CPU Management": 4 });
-  assert.match(s.notes[0], /Brand New Skill/);
+  engine.reply = { ...RESULT, valid: false, issues: ["EFT must start with a [Ship, Fit name] header line"], stats: {} };
+  const s: any = await new FitStats(engine).compute({ eft: "nope" });
+  assert.equal(s.valid, false);
+  assert.deepEqual(s.issues, ["EFT must start with a [Ship, Fit name] header line"]);
+  assert.equal(s.offense, undefined);
 });
 
-test("a failing pilot save falls back to All 5, labelled", async () => {
+test("an eve-fit without evaluate_fit is reported as too old", async () => {
   const engine = new FakeEngine();
-  engine.failSave = true;
-  const s: any = await new FitStats(engine).compute(sde, { eft: "[Rifter, T]", skills, character });
-  assert.equal(engine.calls[1][1].pilot, "All 5");
-  assert.equal(s.pilot, "All 5");
-  assert.match(s.skills_used, /could not load Test Pilot's skills.*disk full/);
+  engine.error = "eve-fit evaluate_fit: Unknown tool: evaluate_fit";
+  await assert.rejects(new FitStats(engine).compute({ eft: "[Rifter, T]" }), /no evaluate_fit tool; update eve-fit-mcp/);
+  const old = new FakeEngine();
+  old.reply = { fit_id: 1 };
+  await assert.rejects(new FitStats(old).compute({ eft: "[Rifter, T]" }), /contract missing/);
 });
 
 test("EVE_FIT_COMMAND wins and can disable the integration", () => {

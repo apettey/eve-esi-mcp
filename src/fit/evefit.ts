@@ -3,7 +3,6 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import type { Sde } from "../sde/db.js";
 import type { CharacterSkills } from "../skills.js";
 import { VERSION } from "../config.js";
 import { log, round } from "../util.js";
@@ -119,74 +118,47 @@ export class EveFitClient implements FitEngine {
   }
 }
 
-export const DEFAULT_PILOT = "All 5";
+export const CONTRACT = "eve-fit/evaluate_fit@1";
 
 export interface StatsRequest {
   eft: string;
   skills?: CharacterSkills;
-  character?: { id: number; name: string };
+  /** Whose skills these are, for labelling. */
+  characterName?: string;
+  /** Active implant type ids of that character. */
+  implants?: number[];
 }
 
-/** Pushes characters' skills into eve-fit custom pilots and turns get_stats output into the `stats` section. */
+/** Evaluates fits with eve-fit's stateless evaluate_fit and turns the result into the `stats` section. */
 export class FitStats {
-  /** character id -> fingerprint of the skills last saved as its pilot. */
-  private saved = new Map<number, string>();
-
   constructor(private readonly engine: FitEngine) {}
 
-  static pilotName(characterId: number) {
-    return `eve-esi-mcp ${characterId}`;
-  }
-
-  /** Saves the character's active skill levels as an eve-fit pilot (base level 0, replace) and returns its name. */
-  async pilotFor(sde: Sde, character: { id: number }, skills: CharacterSkills): Promise<{ pilot: string; skipped: string[] }> {
-    const levels: Record<string, number> = {};
-    for (const [id, l] of skills.levels) {
-      if (l.active > 0) levels[sde.typeName(id)] = l.active;
+  async compute(req: StatsRequest): Promise<Record<string, unknown>> {
+    const args: Record<string, unknown> = { eft: req.eft };
+    if (req.skills) {
+      // Active levels (alpha clones are capped); unlisted skills count as untrained.
+      const levels: Record<string, number> = {};
+      for (const [id, l] of req.skills.levels) if (l.active > 0) levels[String(id)] = l.active;
+      args.skills = levels;
     }
-    const name = FitStats.pilotName(character.id);
-    const fingerprint = JSON.stringify(Object.entries(levels).sort());
-    if (this.saved.get(character.id) === fingerprint) return { pilot: name, skipped: [] };
-    const skipped: string[] = [];
-    // eve-fit rejects skill names its (Pyfa) game data does not know; drop those and retry.
-    for (let attempt = 0; attempt < 20; attempt++) {
-      try {
-        await this.engine.call("save_pilot", { name, base_level: 0, skills: levels, replace: true });
-        this.saved.set(character.id, fingerprint);
-        return { pilot: name, skipped };
-      } catch (err) {
-        const unknown = /Unknown skill '([^']+)'|Unknown skill "([^"]+)"/.exec((err as Error).message);
-        const skill = unknown && (unknown[1] ?? unknown[2]);
-        if (!skill || !(skill in levels)) throw err;
-        delete levels[skill];
-        skipped.push(skill);
-      }
-    }
-    throw new Error("too many skills unknown to eve-fit");
-  }
-
-  /** Loads the fit into eve-fit, reads the full stats and closes it again. */
-  async compute(sde: Sde, req: StatsRequest): Promise<Record<string, unknown>> {
-    let pilot = DEFAULT_PILOT;
-    let pilotNote = "All skills at level 5 (no character skills available).";
-    const notes: string[] = [];
-    if (req.skills && req.character) {
-      try {
-        const p = await this.pilotFor(sde, req.character, req.skills);
-        pilot = p.pilot;
-        pilotNote = `${req.character.name}'s trained skills (active levels).`;
-        if (p.skipped.length) notes.push(`Skills unknown to eve-fit, treated as untrained: ${p.skipped.join(", ")}.`);
-      } catch (err) {
-        pilotNote = `All skills at level 5: could not load ${req.character.name}'s skills into eve-fit (${(err as Error).message}).`;
-      }
-    }
-    const loaded = await this.engine.call("load_fit", { eft: req.eft, pilot });
+    if (req.implants?.length) args.implants = req.implants;
+    let r: any;
     try {
-      const s = await this.engine.call("get_stats", { fit_id: loaded.fit_id, full: true });
-      return formatStats(s, { pilot, pilotNote, character: pilot === DEFAULT_PILOT ? undefined : req.character?.name, notes });
-    } finally {
-      await this.engine.call("close_fit", { fit_id: loaded.fit_id }).catch(() => undefined);
+      r = await this.engine.call("evaluate_fit", args);
+    } catch (err) {
+      if (/unknown tool|not found/i.test((err as Error).message)) {
+        throw new Error("this eve-fit-mcp has no evaluate_fit tool; update eve-fit-mcp");
+      }
+      throw err;
     }
+    if (typeof r?.contract !== "string" || !r.contract.startsWith("eve-fit/evaluate_fit@1")) {
+      throw new Error(`unsupported eve-fit response (contract ${r?.contract ?? "missing"}, expected ${CONTRACT})`);
+    }
+    const skillsUsed = req.skills
+      ? `${req.characterName ?? "Character"}'s trained skills (active levels)` +
+        (req.implants?.length ? ` with ${req.implants.length} active implant(s).` : ".")
+      : "All skills at level 5 (no character skills available).";
+    return formatStats(r, { skillsUsed });
   }
 }
 
@@ -202,22 +174,26 @@ function resource(s: any, key: string) {
   return { used: n(used, 2), total: n(total, 2), free: n(total - used, 2), percent: total ? round((used / total) * 100, 1) : null };
 }
 
-/** Turns eve-fit's flat get_stats(full=true) dict into a grouped, rounded section. */
-export function formatStats(s: any, meta: { pilot: string; pilotNote: string; character?: string; notes?: string[] }) {
+/** Turns an evaluate_fit result (raw numbers, resists as fractions) into a grouped, rounded section. */
+export function formatStats(r: any, meta: { skillsUsed: string }) {
+  const s = r.stats ?? {};
+  const head = {
+    source: `eve-fit (Pyfa${r.engine?.pyfa_version ? " " + r.engine.pyfa_version : ""}): skills, rigs, ship bonuses and module effects applied`,
+    pilot: r.pilot_used ?? undefined,
+    skills_used: meta.skillsUsed,
+    valid: r.valid,
+    ...(r.issues?.length ? { issues: r.issues } : {}),
+    ...(r.missing_skills?.length ? { missing_skills: r.missing_skills } : {}),
+  };
+  // A fit eve-fit could not parse comes back as valid=false with issues and no numbers.
+  if (!Object.keys(s).length) return head;
   const resists = Object.fromEntries(
     LAYERS.map((l) => [l, Object.fromEntries(DAMAGE.map((d) => [d, pct(s[`resist_${l}_${d}`])]))]),
   );
   const stable = s.cap_stable >= 1;
-  const missing = s.missing_skills && Object.keys(s.missing_skills).length ? s.missing_skills : undefined;
   const turretOptimal = n(s.weapon_optimal, 0);
   return {
-    source: "eve-fit (Pyfa engine): skills, rigs, ship bonuses and module effects applied",
-    pilot: meta.pilot,
-    skills_used: meta.pilotNote,
-    ...(meta.notes?.length ? { notes: meta.notes } : {}),
-    valid: s.valid,
-    ...(s.issues?.length ? { issues: s.issues } : {}),
-    ...(missing ? { missing_skills: missing } : {}),
+    ...head,
     offense: {
       dps: n(s.dps_total),
       weapon_dps: n(s.dps_weapon),
@@ -231,9 +207,9 @@ export function formatStats(s: any, meta: { pilot: string; pilotNote: string; ch
     },
     defense: {
       ehp: n(s.ehp_total, 0),
+      ehp_vs: "omni damage (25% each type)",
       ehp_by_layer: Object.fromEntries(LAYERS.map((l) => [l, n(s[`ehp_${l}`], 0)])),
       raw_hp: n(s.hp_total, 0),
-      damage_profile: s.damage_profile,
       resists_percent: resists,
       sustained_tank_ehp_s: n(s.tank_sustained),
       burst_tank_ehp_s: n(s.tank_burst),

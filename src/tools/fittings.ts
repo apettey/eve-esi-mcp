@@ -33,13 +33,24 @@ async function skillsFor(ctx: Ctx, c: StoredCharacter | undefined, wanted: boole
   }
 }
 
+/** Active implants of the character, if the token allows it (only used to make engine stats exact). */
+async function activeImplants(ctx: Ctx, c: StoredCharacter): Promise<number[] | undefined> {
+  if (!c.scopes.includes("esi-clones.read_implants.v1")) return undefined;
+  try {
+    return await ctx.esi.get<number[]>(`/characters/${c.id}/implants`, { character: c, scope: "esi-clones.read_implants.v1" });
+  } catch {
+    return undefined;
+  }
+}
+
 /** Engine stats for renderFit (`stats`, or `statsNote` saying why not); never throws. */
-async function engineStats(sde: Sde, fit: Fit, skills: CharacterSkills | undefined, c: StoredCharacter | undefined) {
+async function engineStats(ctx: Ctx, sde: Sde, fit: Fit, skills: CharacterSkills | undefined, c: StoredCharacter | undefined) {
   const engine = fitStats();
   if (!engine) return { statsNote: EVE_FIT_NOT_CONFIGURED };
   try {
-    const character = skills && c ? { id: c.id, name: c.name } : undefined;
-    return { stats: await engine.compute(sde, { eft: toEft(sde, fit), skills, character }) };
+    // Implants listed in the fit itself win over the character's current ones.
+    const implants = skills && c && !fit.implants.length ? await activeImplants(ctx, c) : undefined;
+    return { stats: await engine.compute({ eft: toEft(sde, fit), skills, characterName: c?.name, implants }) };
   } catch (err) {
     log("eve-fit stats failed:", (err as Error).message);
     return { statsNote: `Accurate stats unavailable: eve-fit failed (${(err as Error).message}).` };
@@ -147,7 +158,7 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
         const fit = fitFromFlaggedItems(sde, f.name, f.ship_type_id, f.items, f.description);
         rendered.push({
           fitting_id: f.fitting_id,
-          ...renderFit(sde, fit, { detail: attributes, skills, characterName: c.name, ...(await engineStats(sde, fit, skills, c)) }),
+          ...renderFit(sde, fit, { detail: attributes, skills, characterName: c.name, ...(await engineStats(ctx, sde, fit, skills, c)) }),
         });
       }
       return reply(
@@ -217,7 +228,7 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
       const fit: Fit = fitFromFlaggedItems(sde, name, shipItem.type_id, contents);
       const skills = await skillsFor(ctx, c, true);
       const loc = index.roots.get(rootOf(index, shipItem).location_id);
-      const rendered = renderFit(sde, fit, { detail: attributes, skills, characterName: c.name, ...(await engineStats(sde, fit, skills, c)) });
+      const rendered = renderFit(sde, fit, { detail: attributes, skills, characterName: c.name, ...(await engineStats(ctx, sde, fit, skills, c)) });
       return reply(
         {
           character: c.name,
@@ -252,7 +263,7 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
       const { fit, warnings } = parseEft(sde, eft);
       const c = ctx.maybeCharacter(character);
       const skills = await skillsFor(ctx, c, true);
-      const rendered = renderFit(sde, fit, { detail: attributes, skills, characterName: c?.name, ...(await engineStats(sde, fit, skills, c)) });
+      const rendered = renderFit(sde, fit, { detail: attributes, skills, characterName: c?.name, ...(await engineStats(ctx, sde, fit, skills, c)) });
       return reply({ warnings: warnings.length ? warnings : undefined, ...rendered }, { texts: [rendered.eft] });
     }),
   );
