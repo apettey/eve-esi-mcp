@@ -122,7 +122,8 @@ export function shipSlotCounts(sde: Sde, shipTypeId: number, fit?: Fit): Record<
     med: a.get(ATTR.medSlots) ?? 0,
     low: a.get(ATTR.lowSlots) ?? 0,
     rig: a.get(ATTR.rigSlots) ?? 0,
-    subsystem: a.get(ATTR.subsystemSlots) ?? 0,
+    // maxSubSystems is still 5 on T3 cruisers, but only 4 subsystem slots exist since the 2017 rework.
+    subsystem: Math.min(a.get(ATTR.subsystemSlots) ?? 0, 4),
     service: a.get(2056) ?? 0,
   };
   // Strategic cruisers get their slots from subsystems.

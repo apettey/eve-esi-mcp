@@ -167,9 +167,10 @@ export function registerAssetTools(server: McpServer, ctx: Ctx) {
       }
 
       if (effectiveMode === "ships") {
-        const ships = index.items
+        const allShips = index.items
           .filter((a) => a.is_singleton && sde.type(a.type_id)?.category_id === CATEGORY.ship && locOk(a))
-          .filter((a) => !q || norm(sde.typeName(a.type_id)).includes(q) || norm(index.names.get(a.item_id) ?? "").includes(q))
+          .filter((a) => !q || norm(sde.typeName(a.type_id)).includes(q) || norm(index.names.get(a.item_id) ?? "").includes(q));
+        const ships = allShips
           .slice(0, max)
           .map((a) => ({
             ship: sde.typeName(a.type_id),
@@ -180,7 +181,15 @@ export function registerAssetTools(server: McpServer, ctx: Ctx) {
             inside: index.byId.has(a.location_id) ? pathOf(sde, index, a) : undefined,
             fitted_modules: (index.children.get(a.item_id) ?? []).filter((x) => /Slot\d/.test(x.location_flag) && sde.type(x.type_id)?.category_id !== CATEGORY.charge).length,
           }));
-        return reply({ character: c.name, count: ships.length, ships, hint: "Use ship_fitting with an item_id or name to get the full fit and EFT." });
+        return reply({
+          character: c.name,
+          total: allShips.length,
+          shown: ships.length,
+          ships,
+          hint: allShips.length > ships.length
+            ? "More ships than shown: filter with query/location or raise limit. Use ship_fitting with an item_id or name for the full fit and EFT."
+            : "Use ship_fitting with an item_id or name to get the full fit and EFT.",
+        });
       }
 
       const matches = index.items.filter((a) => {

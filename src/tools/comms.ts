@@ -15,9 +15,10 @@ function parseNotificationText(text: string | undefined): Record<string, string>
   return out;
 }
 
-const TYPE_FIELDS = /^(typeID|shipTypeID|structureTypeID|victimShipTypeID|moonMaterialTypeID|towerTypeID)$/;
-const SYSTEM_FIELDS = /^(solarSystemID|systemID|solarsystemID)$/;
-const ENTITY_FIELDS = /^(charID|characterID|corpID|corporationID|allianceID|aggressorID|aggressorCorpID|aggressorAllianceID|againstID|declaredByID|ownerCorpID|senderCharID|victimID|newCeoID|oldOwnerCorpID|newOwnerCorpID|factionID|entityID)$/;
+const TYPE_FIELDS = /typeID$/i;
+/** Any other *ID field with a plausible id is resolved generically (characters, corps, stations, systems, ...). */
+const ID_FIELD = /ID$/;
+const isResolvableId = (v: string) => /^\d+$/.test(v) && Number(v) > 0 && Number(v) < 1e12;
 
 export function registerCommsTools(server: McpServer, ctx: Ctx) {
   server.registerTool(
@@ -171,7 +172,7 @@ export function registerCommsTools(server: McpServer, ctx: Ctx) {
       const entityIds = new Set<number>();
       for (const { n, fields } of parsed) {
         entityIds.add(n.sender_id);
-        for (const [k, v] of Object.entries(fields)) if (ENTITY_FIELDS.test(k) && /^\d+$/.test(v)) entityIds.add(Number(v));
+        for (const [k, v] of Object.entries(fields)) if (ID_FIELD.test(k) && !TYPE_FIELDS.test(k) && isResolvableId(v)) entityIds.add(Number(v));
       }
       const names = await ctx.resolver.entities(entityIds);
       return reply({
@@ -180,10 +181,10 @@ export function registerCommsTools(server: McpServer, ctx: Ctx) {
         notifications: parsed.map(({ n, fields }) => {
           const details: Record<string, string> = {};
           for (const [k, v] of Object.entries(fields)) {
-            const num = /^\d+$/.test(v) ? Number(v) : null;
-            if (num != null && TYPE_FIELDS.test(k)) details[k.replace(/ID$/, "")] = sde.typeName(num);
-            else if (num != null && SYSTEM_FIELDS.test(k)) details[k.replace(/ID$/, "")] = sde.system(num)?.name ?? v;
-            else if (num != null && ENTITY_FIELDS.test(k)) details[k.replace(/ID$/, "")] = names.get(num)?.name ?? v;
+            const num = isResolvableId(v) ? Number(v) : null;
+            const label = k.replace(/ID$/, "");
+            if (num != null && TYPE_FIELDS.test(k)) details[label] = sde.typeName(num);
+            else if (num != null && ID_FIELD.test(k) && names.has(num)) details[label] = names.get(num)!.name;
             else details[k] = v.length > 200 ? v.slice(0, 200) + "…" : v;
           }
           return {
@@ -244,7 +245,7 @@ export function registerCommsTools(server: McpServer, ctx: Ctx) {
           const sys = sde.systemSummary(k.solar_system_id);
           let fit: string | undefined;
           let dropped: string[] | undefined;
-          if (loss || include_fit) {
+          if ((loss || include_fit) && k.victim.items?.length) {
             const items = (k.victim.items ?? []).map((i: any) => ({
               type_id: i.item_type_id,
               flag: numericFlagToName(i.flag),
