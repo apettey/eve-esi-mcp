@@ -25,7 +25,8 @@ export async function currentLocation(ctx: Ctx, c: StoredCharacter) {
   const sde = await ctx.sde();
   const dockedId = loc.station_id ?? loc.structure_id;
   const docked = dockedId ? await ctx.resolver.location(dockedId, c) : null;
-  return { system: sde.systemSummary(loc.solar_system_id), docked_at: docked?.name ?? null, docked_id: dockedId ?? null };
+  const wormhole = sde.wormholeSystem(loc.solar_system_id);
+  return { system: { ...sde.systemSummary(loc.solar_system_id), wormhole: wormhole ?? undefined }, docked_at: docked?.name ?? null, docked_id: dockedId ?? null };
 }
 
 export function registerCharacterDataTools(server: McpServer, ctx: Ctx) {

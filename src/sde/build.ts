@@ -13,7 +13,7 @@ import { log } from "../util.js";
  * Only the datasets the tools need are imported; localized strings keep English only.
  */
 
-export const SDE_SCHEMA_VERSION = 3;
+export const SDE_SCHEMA_VERSION = 4;
 
 const SCHEMA = `
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
@@ -42,7 +42,7 @@ CREATE TABLE regions (id INTEGER PRIMARY KEY, name TEXT);
 CREATE TABLE constellations (id INTEGER PRIMARY KEY, name TEXT, region_id INTEGER);
 CREATE TABLE systems (
   id INTEGER PRIMARY KEY, name TEXT, constellation_id INTEGER, region_id INTEGER,
-  security REAL, security_class TEXT
+  security REAL, security_class TEXT, wormhole_class_id INTEGER, effect_beacon_id INTEGER, visual_effect TEXT
 );
 CREATE INDEX systems_name ON systems (name COLLATE NOCASE);
 CREATE TABLE system_jumps (from_id INTEGER, to_id INTEGER, PRIMARY KEY (from_id, to_id)) WITHOUT ROWID;
@@ -219,15 +219,31 @@ export async function buildSde(home: string, build: number, userAgent: string): 
     const un = ins("INSERT INTO units VALUES (?,?,?)");
     await eachLine(zip, entries, "dogmaUnits.jsonl", (r) => un.run(r._key, en(r.name), en(r.displayName)));
 
+    // Wormhole class sits on the system, else its constellation, else its region.
+    const regionClass = new Map<number, number>();
+    const constellationClass = new Map<number, number>();
     const rg = ins("INSERT INTO regions VALUES (?,?)");
-    await eachLine(zip, entries, "mapRegions.jsonl", (r) => rg.run(r._key, en(r.name)));
+    await eachLine(zip, entries, "mapRegions.jsonl", (r) => {
+      if (r.wormholeClassID != null) regionClass.set(r._key, r.wormholeClassID);
+      rg.run(r._key, en(r.name));
+    });
     const co = ins("INSERT INTO constellations VALUES (?,?,?)");
-    await eachLine(zip, entries, "mapConstellations.jsonl", (r) => co.run(r._key, en(r.name), r.regionID));
-    const sys = ins("INSERT INTO systems VALUES (?,?,?,?,?,?)");
+    await eachLine(zip, entries, "mapConstellations.jsonl", (r) => {
+      if (r.wormholeClassID != null) constellationClass.set(r._key, r.wormholeClassID);
+      co.run(r._key, en(r.name), r.regionID);
+    });
+    // Wormhole system effects (Pulsar, Magnetar, ...) are secondary suns carrying an effect beacon type.
+    const beacons = new Map<number, number>();
+    await eachLine(zip, entries, "mapSecondarySuns.jsonl", (r) => beacons.set(r.solarSystemID, r.effectBeaconTypeID));
+    const sys = ins("INSERT INTO systems VALUES (?,?,?,?,?,?,?,?,?)");
     const systemNames = new Map<number, string>();
     await eachLine(zip, entries, "mapSolarSystems.jsonl", (r) => {
       systemNames.set(r._key, en(r.name)!);
-      sys.run(r._key, en(r.name), r.constellationID, r.regionID, r.securityStatus ?? null, r.securityClass ?? null);
+      const whClass = r.wormholeClassID ?? constellationClass.get(r.constellationID) ?? regionClass.get(r.regionID) ?? null;
+      sys.run(
+        r._key, en(r.name), r.constellationID, r.regionID, r.securityStatus ?? null, r.securityClass ?? null,
+        whClass, beacons.get(r._key) ?? null, r.visualEffect ?? null,
+      );
     });
     const jumps = ins("INSERT OR IGNORE INTO system_jumps VALUES (?,?)");
     await eachLine(zip, entries, "mapStargates.jsonl", (r) => jumps.run(r.solarSystemID, r.destination.solarSystemID));

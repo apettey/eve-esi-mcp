@@ -16,7 +16,7 @@ An [MCP](https://modelcontextprotocol.io) server for EVE Online's [ESI API](http
 | Character data | `character_overview` (location, ship, wallet, SP and training, clones, implants, fatigue, LP), `character_skills`, `skill_check` |
 | Assets | `assets` (summary / search / ships), `ship_fitting` (EFT of a real ship; defaults to the one being flown) |
 | Fittings | `fittings_list`, `fitting_get`, `fitting_analyze` (any EFT), `fitting_save`, `fitting_delete` |
-| Items & universe | `search_items`, `item_info`, `lookup`, `system_info`, `route_plan`, `server_status` |
+| Items & universe | `search_items`, `item_info`, `lookup`, `system_info` (includes wormhole class, effect and statics), `wormhole_type` (K162, H296, ...), `route_plan`, `server_status` |
 | Market & money | `market_prices`, `appraise`, `market_orders` (with undercut detection), `wallet`, `contracts` |
 | Industry | `industry` (jobs and blueprints), `planets` (PI extractor timers, storage) |
 | Comms | `mail_list`, `mail_read`, `mail_send`, `notifications`, `killmails` (fits of losses as EFT) |
@@ -116,6 +116,7 @@ node dist/index.js characters       # list stored characters
 
 - Refresh tokens are stored in `characters.json` in the data directory, with owner-only file permissions where the OS supports them. Anyone who can read that file can access the characters' data within the granted scopes. Use `character_logout` to revoke a token.
 - `fitting_save`, `fitting_delete`, `mail_send`, `ui_action`, `route_plan` with `set_destination`, and non-GET `esi_request` calls change things in your account or game client. The tool descriptions tell the model to confirm with you first.
+- Wormhole class, system effects with their modifiers, and wormhole type attributes (destination, mass, lifetime) come from the SDE. The SDE doesn't list statics, so these come from [WormholeSystems](https://github.com/WormholeSystems/WormholeSystems) (`data/static/wormhole_systems.json`, MIT licence, © 2026 WormholeSystems), vendored in [`src/sde/wormhole-statics.ts`](src/sde/wormhole-statics.ts). Run `node scripts/update-wormhole-statics.mjs` to refresh it.
 - Fitting resource numbers come from static data, so skills, rigs and module bonuses aren't applied. For exact stats, give the EFT output to a fitting engine.
 
 ## Development

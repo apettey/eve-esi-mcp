@@ -27,7 +27,7 @@ Prefer the composite tools — they each replace many raw ESI calls:
 - assets (summary | search | ships) and ship_fitting (EFT of an actual ship, default the one being flown).
 - fittings_list / fitting_get / fitting_analyze / fitting_save: fits with module names, slot layout, CPU/PG,
   attributes, skill check and EFT text.
-- item_info / search_items / skill_check / market_prices / appraise / route_plan / system_info / lookup.
+- item_info / search_items / skill_check / market_prices / appraise / route_plan / system_info (incl. wormhole class/effect/statics) / wormhole_type / lookup.
 - esi_request covers any remaining ESI route.
 Static data (items, attributes, systems) is served locally; the first call after install may take ~1 minute while
 the official SDE is downloaded and indexed.
