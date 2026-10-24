@@ -127,6 +127,9 @@ export interface StatsRequest {
   characterName?: string;
   /** Active implant type ids of that character. */
   implants?: number[];
+  /** Charges loaded from cargo for this calculation only (see fit/ammo.ts), and weapons left without one. */
+  assumedCharges?: string[];
+  unloadedWeapons?: string[];
 }
 
 /** Evaluates fits with eve-fit's stateless evaluate_fit and turns the result into the `stats` section. */
@@ -158,7 +161,7 @@ export class FitStats {
       ? `${req.characterName ?? "Character"}'s trained skills (active levels)` +
         (req.implants?.length ? ` with ${req.implants.length} active implant(s).` : ".")
       : "All skills at level 5 (no character skills available).";
-    return formatStats(r, { skillsUsed });
+    return formatStats(r, { skillsUsed, assumedCharges: req.assumedCharges, unloadedWeapons: req.unloadedWeapons });
   }
 }
 
@@ -175,12 +178,14 @@ function resource(s: any, key: string) {
 }
 
 /** Turns an evaluate_fit result (raw numbers, resists as fractions) into a grouped, rounded section. */
-export function formatStats(r: any, meta: { skillsUsed: string }) {
+export function formatStats(r: any, meta: { skillsUsed: string; assumedCharges?: string[]; unloadedWeapons?: string[] }) {
   const s = r.stats ?? {};
   const head = {
     source: `eve-fit (Pyfa${r.engine?.pyfa_version ? " " + r.engine.pyfa_version : ""}): skills, rigs, ship bonuses and module effects applied`,
     pilot: r.pilot_used ?? undefined,
     skills_used: meta.skillsUsed,
+    ...(meta.assumedCharges?.length ? { assumed_charges: meta.assumedCharges } : {}),
+    ...(meta.unloadedWeapons?.length ? { unloaded_weapons: meta.unloadedWeapons } : {}),
     valid: r.valid,
     ...(r.issues?.length ? { issues: r.issues } : {}),
     ...(r.missing_skills?.length ? { missing_skills: r.missing_skills } : {}),
