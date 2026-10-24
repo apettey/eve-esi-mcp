@@ -51,12 +51,12 @@ The EFT text is also returned as a separate text block, so it can be copied stra
 
 `resources` uses static data only, so skills, rigs and module bonuses aren't applied, and many working fits look over budget there. For engine-accurate numbers, `fitting_get`, `ship_fitting` and `fitting_analyze` can use [eve-fit-mcp](https://github.com/apettey/eve-fit-mcp), a fitting engine built on Pyfa. When eve-fit is configured, each fit also gets a `stats` section with these values:
 
-- offense: DPS, volley, weapon range and tracking
-- defense: EHP per layer, resists, sustained and burst tank
+- offense: DPS and volley (weapons and drones), range and tracking of the main weapon, missile explosion radius and velocity, and a per-weapon-group breakdown
+- defense: EHP per layer and against each single damage type, resists, sustained and burst tank
 - capacitor: stability, or how long it lasts
-- navigation: speed, align time, signature and warp speed
+- navigation: speed, align time, signature and warp speed, plus the same values with the prop module off when they differ
 - targeting: lock range, scan resolution and sensor strength
-- fitting: CPU/PG/calibration/drone usage after skills, plus slot and hardpoint usage
+- fitting: CPU/PG/calibration/drone/cargo usage after skills, plus slot and hardpoint usage
 - any fitting issues and missing skills
 
 eve-esi-mcp starts eve-fit as a child MCP server the first time a fitting tool needs it, then reuses it. Each fit is a single stateless `evaluate_fit` call (contract `eve-fit/evaluate_fit@1`). If a character with the skills scope is involved, its active skill levels are sent with the call, along with its active implants if the token has `esi-clones.read_implants.v1` and the fit lists no implants of its own. So the stats reflect what that character can actually fly. With no character, the stats use `All 5`. The `pilot` and `skills_used` fields say which skills were used. If eve-fit isn't configured, is too old to have `evaluate_fit`, or fails, `stats` is left out and a short `stats_note` explains why. The rest of the output is unaffected.
