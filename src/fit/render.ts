@@ -56,7 +56,19 @@ export function moduleAttributes(sde: Sde, typeId: number, detail: AttributeDeta
  * Produces a self-contained description of a fit: named slots, resource usage, ship stats and bonuses,
  * per-module attributes, skill check against a character, plus EFT and DNA exports.
  */
-export function renderFit(sde: Sde, fit: Fit, opts: { detail?: AttributeDetail; skills?: CharacterSkills; characterName?: string } = {}) {
+export function renderFit(
+  sde: Sde,
+  fit: Fit,
+  opts: {
+    detail?: AttributeDetail;
+    skills?: CharacterSkills;
+    characterName?: string;
+    /** Engine-calculated stats (see fit/evefit.ts), shown next to the base resources. */
+    stats?: Record<string, unknown>;
+    /** Why `stats` is missing, when it is. */
+    statsNote?: string;
+  } = {},
+) {
   const detail = opts.detail ?? "summary";
   const ship = sde.type(fit.ship_type_id);
   const counts = shipSlotCounts(sde, fit.ship_type_id, fit);
@@ -202,6 +214,7 @@ export function renderFit(sde: Sde, fit: Fit, opts: { detail?: AttributeDetail; 
     implants: fit.implants.map((i) => sde.typeName(i)),
     cargo: fit.cargo.map((c) => ({ name: sde.typeName(c.type_id), quantity: c.quantity })),
     resources,
+    ...(opts.stats ? { stats: opts.stats } : opts.statsNote ? { stats_note: opts.statsNote } : {}),
     modules,
     charges_and_drones: extras,
     skill_check: skillCheck

@@ -33,6 +33,10 @@ An [MCP](https://modelcontextprotocol.io) server for EVE Online's [ESI API](http
   "slots": { "high": [{ "slot": "high:0", "module": "200mm AutoCannon II", "charge": "Republic Fleet EMP S" }, ...],
              "low":  [..., { "slot": "low:3", "module": "(empty)" }] },
   "resources": { "cpu": { "used": "116 tf", "available": "130 tf", "percent": 89.2 }, "turret_hardpoints": "3/3", ... },
+  "stats": { "pilot": "eve-esi-mcp 90000001", "skills_used": "My Pilot's trained skills (active levels).",   // with eve-fit only
+             "offense": { "dps": 142.3, "volley": 213.5, ... }, "defense": { "ehp": 4120, "resists_percent": { ... } },
+             "capacitor": { "stable": false, "lasts_s": 95 }, "navigation": { "max_speed_m_s": 3240.5, "align_time_s": 4.69 },
+             "fitting": { "cpu_tf": { "used": 135.8, "total": 162.5, "percent": 83.5 }, ... } },
   "modules": [{ "name": "Stasis Webifier II", "required_skills": [{ "skill": "Propulsion Jamming", "level": 4, "met": true }],
                 "attributes": { "EW - Webbing": { "Maximum Velocity Bonus": "-60%" }, "Turrets": { "Optimal Range": "10,000 m" } } }],
   "skill_check": { "character": "My Pilot", "can_use": false, "missing": [{ "skill": "Small Projectile Turret", "required_level": 5, "trained_level": 4, "training_time": "4d 2h" }] },
@@ -42,6 +46,22 @@ An [MCP](https://modelcontextprotocol.io) server for EVE Online's [ESI API](http
 ```
 
 The EFT text is also returned as a separate text block, so it can be copied straight into the game ("Import from Clipboard") or into a fitting engine such as Pyfa.
+
+### Accurate fit stats with eve-fit
+
+`resources` uses static data only, so skills, rigs and module bonuses aren't applied, and many working fits look over budget there. For engine-accurate numbers, `fitting_get`, `ship_fitting` and `fitting_analyze` can use [eve-fit-mcp](https://github.com/apettey/eve-fit-mcp), a fitting engine built on Pyfa. When eve-fit is configured, each fit also gets a `stats` section with these values:
+
+- offense: DPS, volley, weapon range and tracking
+- defense: EHP per layer, resists, sustained and burst tank
+- capacitor: stability, or how long it lasts
+- navigation: speed, align time, signature and warp speed
+- targeting: lock range, scan resolution and sensor strength
+- fitting: CPU/PG/calibration/drone usage after skills, plus slot and hardpoint usage
+- any fitting issues and missing skills
+
+eve-esi-mcp starts eve-fit as a child MCP server the first time a fitting tool needs it, then reuses it. For each fit it loads the EFT, reads the stats and closes the fit. If a character with the skills scope is involved, its active skill levels are saved as an eve-fit custom pilot named `eve-esi-mcp <character id>`. The pilot is re-saved only when the skills change, so the stats reflect what that character can actually fly. With no character, the stats use `All 5`. The `pilot` and `skills_used` fields say which skills were used. If eve-fit isn't configured or fails, `stats` is left out and a short `stats_note` explains why. The rest of the output is unaffected.
+
+To enable it, set `EVE_FIT_DIR` to an eve-fit-mcp checkout that has a `.venv`, or set `EVE_FIT_COMMAND`/`EVE_FIT_ARGS` to launch it some other way. A checkout named `eve-fit-mcp` next to this package is detected automatically. The first start can take a while, because Pyfa loads its game data.
 
 ## Setup
 
@@ -111,12 +131,17 @@ node dist/index.js characters       # list stored characters
 | `EVE_CONTACT` | — | Email or Discord handle added to the User-Agent, as [CCP asks](https://developers.eveonline.com/docs/services/esi/best-practices/) |
 | `EVE_SCOPES` | `standard` preset | Default scopes for `character_login` |
 | `EVE_OPEN_BROWSER` | `true` | Set to `false` to only return the login URL |
+| `EVE_FIT_DIR` | sibling `../eve-fit-mcp` if present | eve-fit-mcp checkout. Launched as `.venv` Python `-m eve_fit_mcp.server` for [accurate stats](#accurate-fit-stats-with-eve-fit) |
+| `EVE_FIT_COMMAND` | — | Command that starts eve-fit over stdio. Overrides `EVE_FIT_DIR`. Set it to `off` to disable the integration |
+| `EVE_FIT_ARGS` | — | Arguments for `EVE_FIT_COMMAND`, separated by spaces or given as a JSON array |
+| `EVE_FIT_CWD` | — | Working directory for `EVE_FIT_COMMAND` |
 
 ## Data and security
 
 - Refresh tokens are stored in `characters.json` in the data directory, with owner-only file permissions where the OS supports them. Anyone who can read that file can access the characters' data within the granted scopes. Use `character_logout` to revoke a token.
 - `fitting_save`, `fitting_delete`, `mail_send`, `ui_action`, `route_plan` with `set_destination`, and non-GET `esi_request` calls change things in your account or game client. The tool descriptions tell the model to confirm with you first.
-- Fitting resource numbers come from static data, so skills, rigs and module bonuses aren't applied. For exact stats, give the EFT output to a fitting engine.
+- Fitting resource numbers in `resources` come from static data, so skills, rigs and module bonuses aren't applied. For exact stats, configure eve-fit (see above).
+- With eve-fit enabled, the skill levels of characters whose fits you analyze are written to eve-fit's pilot store (`data/pilots/` in the eve-fit checkout). No tokens are shared.
 
 ## Development
 

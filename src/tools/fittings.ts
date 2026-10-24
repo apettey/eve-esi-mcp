@@ -2,11 +2,12 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Ctx } from "../context.js";
 import type { StoredCharacter } from "../auth/store.js";
-import { CATEGORY } from "../sde/db.js";
+import { CATEGORY, type Sde } from "../sde/db.js";
 import { fitFromFlaggedItems, parseEft, toEft, toEsiItems, type Fit } from "../fit/model.js";
 import { renderFit } from "../fit/render.js";
-import { loadSkills } from "../skills.js";
-import { UserError, norm } from "../util.js";
+import { EVE_FIT_NOT_CONFIGURED, fitStats } from "../fit/evefit.js";
+import { loadSkills, type CharacterSkills } from "../skills.js";
+import { UserError, log, norm } from "../util.js";
 import { READ_ONLY, characterParam, handler, reply } from "./helpers.js";
 import { loadAssets, pathOf, rootOf } from "./assets.js";
 
@@ -32,11 +33,24 @@ async function skillsFor(ctx: Ctx, c: StoredCharacter | undefined, wanted: boole
   }
 }
 
+/** Engine stats for renderFit (`stats`, or `statsNote` saying why not); never throws. */
+async function engineStats(sde: Sde, fit: Fit, skills: CharacterSkills | undefined, c: StoredCharacter | undefined) {
+  const engine = fitStats();
+  if (!engine) return { statsNote: EVE_FIT_NOT_CONFIGURED };
+  try {
+    const character = skills && c ? { id: c.id, name: c.name } : undefined;
+    return { stats: await engine.compute(sde, { eft: toEft(sde, fit), skills, character }) };
+  } catch (err) {
+    log("eve-fit stats failed:", (err as Error).message);
+    return { statsNote: `Accurate stats unavailable: eve-fit failed (${(err as Error).message}).` };
+  }
+}
+
 async function savedFittings(ctx: Ctx, c: StoredCharacter): Promise<EsiFitting[]> {
   return ctx.esi.get<EsiFitting[]>(`/characters/${c.id}/fittings`, { character: c, scope: "esi-fittings.read_fittings.v1" });
 }
 
-function matchFittings(sde: import("../sde/db.js").Sde, fits: EsiFitting[], ref: string | number): EsiFitting[] {
+function matchFittings(sde: Sde, fits: EsiFitting[], ref: string | number): EsiFitting[] {
   const id = Number(ref);
   if (Number.isInteger(id)) {
     const f = fits.find((x) => x.fitting_id === id);
@@ -128,12 +142,14 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
         throw new UserError(`No saved fittings match ${missing.join(", ")}. ${c.name} has ${all.length} fittings; use fittings_list.`);
       }
       const skills = await skillsFor(ctx, c, check_skills);
-      const rendered = [...selected.values()].slice(0, 10).map((f) => ({
-        fitting_id: f.fitting_id,
-        ...renderFit(sde, fitFromFlaggedItems(sde, f.name, f.ship_type_id, f.items, f.description), {
-          detail: attributes, skills, characterName: c.name,
-        }),
-      }));
+      const rendered: Array<{ fitting_id: number } & ReturnType<typeof renderFit>> = [];
+      for (const f of [...selected.values()].slice(0, 10)) {
+        const fit = fitFromFlaggedItems(sde, f.name, f.ship_type_id, f.items, f.description);
+        rendered.push({
+          fitting_id: f.fitting_id,
+          ...renderFit(sde, fit, { detail: attributes, skills, characterName: c.name, ...(await engineStats(sde, fit, skills, c)) }),
+        });
+      }
       return reply(
         { character: c.name, fittings: rendered, not_found: missing.length ? missing : undefined },
         { texts: fitTexts(rendered) },
@@ -201,7 +217,7 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
       const fit: Fit = fitFromFlaggedItems(sde, name, shipItem.type_id, contents);
       const skills = await skillsFor(ctx, c, true);
       const loc = index.roots.get(rootOf(index, shipItem).location_id);
-      const rendered = renderFit(sde, fit, { detail: attributes, skills, characterName: c.name });
+      const rendered = renderFit(sde, fit, { detail: attributes, skills, characterName: c.name, ...(await engineStats(sde, fit, skills, c)) });
       return reply(
         {
           character: c.name,
@@ -222,7 +238,8 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
       title: "Analyze an EFT fit",
       description:
         "Parses any EFT text (from the user, Pyfa, zKillboard, ...) and returns the same rich breakdown as fitting_get: resolved names, " +
-        "resource usage, ship stats/bonuses, module attributes, skill check against a character and DNA. Does not save anything.",
+        "resource usage, ship stats/bonuses, module attributes, skill check against a character and DNA, plus engine stats " +
+        "(EHP, DPS, cap, speed, real CPU/PG) when eve-fit is configured. Does not save anything.",
       inputSchema: {
         eft: z.string().describe("EFT text starting with [Ship, Name]."),
         character: characterParam,
@@ -235,7 +252,7 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
       const { fit, warnings } = parseEft(sde, eft);
       const c = ctx.maybeCharacter(character);
       const skills = await skillsFor(ctx, c, true);
-      const rendered = renderFit(sde, fit, { detail: attributes, skills, characterName: c?.name });
+      const rendered = renderFit(sde, fit, { detail: attributes, skills, characterName: c?.name, ...(await engineStats(sde, fit, skills, c)) });
       return reply({ warnings: warnings.length ? warnings : undefined, ...rendered }, { texts: [rendered.eft] });
     }),
   );

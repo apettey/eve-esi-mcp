@@ -26,7 +26,8 @@ Prefer the composite tools — they each replace many raw ESI calls:
 - character_overview: location, ship, wallet, SP/training, clones/implants, fatigue, LP in one call.
 - assets (summary | search | ships) and ship_fitting (EFT of an actual ship, default the one being flown).
 - fittings_list / fitting_get / fitting_analyze / fitting_save: fits with module names, slot layout, CPU/PG,
-  attributes, skill check and EFT text.
+  attributes, skill check and EFT text. With eve-fit-mcp configured they also include engine \`stats\` (EHP/resists, DPS,
+  cap, speed, skill-applied CPU/PG) calculated with the character's real skills.
 - item_info / search_items / skill_check / market_prices / appraise / route_plan / system_info / lookup.
 - esi_request covers any remaining ESI route.
 Static data (items, attributes, systems) is served locally; the first call after install may take ~1 minute while
@@ -101,6 +102,8 @@ Environment:
   EVE_CONTACT         Contact (email/discord) added to the ESI User-Agent, as CCP requests
   EVE_SCOPES          Default scopes for login (space/comma separated)
   EVE_OPEN_BROWSER    Set to "false" to never open a browser automatically
+  EVE_FIT_DIR         eve-fit-mcp checkout (with .venv) for engine-accurate fit stats; default ../eve-fit-mcp if present
+  EVE_FIT_COMMAND     Command to start eve-fit over stdio instead (EVE_FIT_ARGS, EVE_FIT_CWD); "off" disables it
 `;
 
 const [cmd, arg] = process.argv.slice(2);
