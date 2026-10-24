@@ -138,8 +138,25 @@ export class Esi {
           pages,
           lastModified,
         });
+      } else {
+        this.invalidate(url.pathname);
       }
       return { data: data as T, status: res.status, pages, expires: res.headers.get("expires") ?? undefined, lastModified };
+    }
+  }
+
+  /**
+   * Drops cached GETs a write may have changed: the written route, anything below it, and its parent collection
+   * (e.g. DELETE /characters/1/fittings/2 also clears GET /characters/1/fittings).
+   */
+  private invalidate(pathname: string) {
+    const parent = pathname.replace(/\/[^/]+\/?$/, "/");
+    const self = pathname.endsWith("/") ? pathname : pathname + "/";
+    for (const key of [...this.cache.keys()]) {
+      if (!key.startsWith("GET ")) continue;
+      const p = new URL(key.split(" ")[1]).pathname;
+      const dir = p.endsWith("/") ? p : p + "/";
+      if (dir.startsWith(self) || dir === parent) this.cache.delete(key);
     }
   }
 
