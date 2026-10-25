@@ -58,6 +58,42 @@ export function spPerMinute(sde: Sde, skillId: number, attributes?: Record<numbe
   return p + s / 2;
 }
 
+/** Below this fraction of the omega rate, a queue is training at alpha speed (alphas train at 50%). */
+const ALPHA_RATE_THRESHOLD = 0.8;
+
+export interface CloneState {
+  possibly_alpha?: boolean;
+  evidence?: string;
+}
+
+/**
+ * Infers alpha/omega, which ESI doesn't report directly. Two signals:
+ * - Training rate: alphas train at half the omega rate (primary + secondary / 2). Implants and boosters only speed
+ *   training up, so a dated queue entry well below the omega rate means an alpha clone; at or above it, an omega.
+ * - Capped skills: an alpha's active level is below the trained level for skills beyond the alpha limits.
+ * Returns no verdict when the queue is paused or empty and no skill is capped.
+ */
+export function cloneState(sde: Sde, skills: CharacterSkills, queue?: any[] | null): CloneState {
+  const capped = [...skills.levels.values()].some((s) => s.active < s.trained);
+  const dated = [...(queue ?? [])]
+    .sort((a, b) => a.queue_position - b.queue_position)
+    .find((q) => q.start_date && q.finish_date && q.level_end_sp > (q.training_start_sp ?? q.level_start_sp ?? 0));
+  if (dated) {
+    const minutes = (Date.parse(dated.finish_date) - Date.parse(dated.start_date)) / 60_000;
+    const sp = dated.level_end_sp - (dated.training_start_sp ?? dated.level_start_sp ?? 0);
+    if (minutes > 0) {
+      const ratio = sp / minutes / spPerMinute(sde, dated.skill_id, skills.attributes);
+      const pct = `${Math.round(ratio * 100)}% of omega speed`;
+      if (ratio < ALPHA_RATE_THRESHOLD) return { possibly_alpha: true, evidence: `alpha: queue trains at ${pct}` };
+      return capped
+        ? { possibly_alpha: true, evidence: `queue trains at ${pct}, but some skills are capped below their trained level` }
+        : { possibly_alpha: false, evidence: `omega: queue trains at ${pct}` };
+    }
+  }
+  if (capped) return { possibly_alpha: true, evidence: "alpha: some skills are capped below their trained level" };
+  return {};
+}
+
 /**
  * Collapses the required skills of the given types, including all prerequisite skills recursively,
  * into skillId -> highest required level.

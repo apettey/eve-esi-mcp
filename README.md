@@ -13,7 +13,7 @@ An [MCP](https://modelcontextprotocol.io) server for EVE Online's [ESI API](http
 | Area | Tools |
 | --- | --- |
 | Characters | `characters_list`, `character_login`, `character_select`, `character_logout` |
-| Character data | `character_overview` (location, ship, wallet, SP and training, clones, implants, fatigue, LP), `character_skills`, `skill_check` |
+| Character data | `character_overview` (location, ship, wallet, SP and training, alpha/omega, clones, implants, fatigue, LP), `character_skills`, `skill_check` |
 | Assets | `assets` (summary / search / ships), `ship_fitting` (EFT of a real ship; defaults to the one being flown) |
 | Fittings | `fittings_list`, `fitting_get`, `fitting_analyze` (any EFT), `fitting_save`, `fitting_delete` |
 | Items & universe | `search_items`, `item_info`, `lookup`, `system_info` (includes wormhole class, effect and statics), `wormhole_type` (K162, H296, ...), `route_plan`, `server_status` |
