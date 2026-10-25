@@ -4,7 +4,7 @@ import type { Ctx } from "../context.js";
 import type { StoredCharacter } from "../auth/store.js";
 import type { Sde } from "../sde/db.js";
 import { parseEft } from "../fit/model.js";
-import { attributeName, loadSkills, requirementClosure, skillGaps } from "../skills.js";
+import { attributeName, cloneState, loadSkills, requirementClosure, skillGaps } from "../skills.js";
 import { UserError, duration, isk, norm, round } from "../util.js";
 import { READ_ONLY, characterParam, handler, reply, section } from "./helpers.js";
 import { typeRef } from "./universe.js";
@@ -36,7 +36,7 @@ export function registerCharacterDataTools(server: McpServer, ctx: Ctx) {
       title: "Character overview",
       description:
         "One-call snapshot of a character: corp/alliance, security status, online state, current system/station, active ship, wallet, " +
-        "SP and what's training, clones and implants (with clone-jump availability), jump fatigue and loyalty points. " +
+        "SP and what's training (with alpha/omega inferred from training speed and capped skills), clones and implants (with clone-jump availability), jump fatigue and loyalty points. " +
         "Sections the character has no scope for are reported under 'unavailable' rather than failing.",
       inputSchema: {
         character: characterParam,
@@ -85,7 +85,7 @@ export function registerCharacterDataTools(server: McpServer, ctx: Ctx) {
       });
       run("skills", async () => {
         const [skills, queue] = await Promise.all([
-          ctx.esi.get<any>(`/characters/${c.id}/skills`, { character: c, scope: "esi-skills.read_skills.v1" }),
+          loadSkills(ctx.esi, c),
           c.scopes.includes("esi-skills.read_skillqueue.v1")
             ? ctx.esi.get<any[]>(`/characters/${c.id}/skillqueue`, { character: c }) : Promise.resolve(null),
         ]);
@@ -93,12 +93,14 @@ export function registerCharacterDataTools(server: McpServer, ctx: Ctx) {
         const active = queue?.filter((q) => !q.finish_date || Date.parse(q.finish_date) > now) ?? [];
         const training = active.find((q) => q.start_date && Date.parse(q.start_date) <= now) ?? null;
         const last = active.at(-1);
+        const clone = cloneState(sde, skills, queue);
         out.skills = {
           total_sp: skills.total_sp,
-          unallocated_sp: skills.unallocated_sp ?? 0,
-          skills_trained: skills.skills.length,
-          level_5_skills: skills.skills.filter((s: any) => s.trained_skill_level === 5).length,
-          possibly_alpha: skills.skills.some((s: any) => s.active_skill_level < s.trained_skill_level) || undefined,
+          unallocated_sp: skills.unallocated_sp,
+          skills_trained: skills.levels.size,
+          level_5_skills: [...skills.levels.values()].filter((s) => s.trained === 5).length,
+          possibly_alpha: clone.possibly_alpha,
+          clone_state: clone.evidence,
           queue: queue
             ? {
                 training: training ? `${sde.typeName(training.skill_id)} ${training.finished_level}` : "nothing (queue paused or empty)",
@@ -189,8 +191,10 @@ export function registerCharacterDataTools(server: McpServer, ctx: Ctx) {
       }
       for (const g of Object.values(groups)) g.skills.sort();
       let queue: unknown;
+      let clone = cloneState(sde, sk);
       if (include_queue !== false && c.scopes.includes("esi-skills.read_skillqueue.v1")) {
         const q = await ctx.esi.get<any[]>(`/characters/${c.id}/skillqueue`, { character: c });
+        clone = cloneState(sde, sk, q);
         const now = Date.now();
         queue = q
           .filter((x) => !x.finish_date || Date.parse(x.finish_date) > now)
@@ -205,6 +209,7 @@ export function registerCharacterDataTools(server: McpServer, ctx: Ctx) {
         character: c.name,
         total_sp: sk.total_sp,
         unallocated_sp: sk.unallocated_sp,
+        clone_state: clone.evidence,
         attributes: Object.fromEntries(Object.entries(sk.attributes).map(([k, v]) => [attributeName(Number(k)), v])),
         skill_groups: Object.fromEntries(Object.entries(groups).sort(([a], [b]) => a.localeCompare(b))),
         queue,
