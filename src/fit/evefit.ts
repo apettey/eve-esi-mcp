@@ -171,6 +171,20 @@ const DAMAGE = ["em", "thermal", "kinetic", "explosive"] as const;
 const n = (v: unknown, digits = 1) => (typeof v === "number" && Number.isFinite(v) ? round(v, digits) : undefined);
 const pct = (v: unknown) => (typeof v === "number" ? round(v * 100, 1) : undefined);
 
+/** One entry of evaluate_fit's weapon_groups (most DPS first), with units in the key names like the rest. */
+function weaponGroup(g: any) {
+  const missile = g.explosion_radius != null;
+  return {
+    weapon: g.weapon,
+    ...(g.charge ? { charge: g.charge } : {}),
+    count: g.count,
+    dps: n(g.dps),
+    ...(missile
+      ? { range_m: n(g.optimal, 0), explosion_radius_m: n(g.explosion_radius), explosion_velocity_m_s: n(g.explosion_velocity) }
+      : { optimal_m: n(g.optimal, 0), falloff_m: n(g.falloff, 0), tracking: n(g.tracking, 4) }),
+  };
+}
+
 function resource(s: any, key: string) {
   const used = s[`${key}_used`], total = s[`${key}_total`];
   if (typeof used !== "number" || typeof total !== "number" || (!used && !total)) return undefined;
@@ -197,6 +211,13 @@ export function formatStats(r: any, meta: { skillsUsed: string; assumedCharges?:
   );
   const stable = s.cap_stable >= 1;
   const turretOptimal = n(s.weapon_optimal, 0);
+  const groups: any[] = Array.isArray(r.weapon_groups) ? r.weapon_groups : [];
+  // The weapon_* range keys describe the primary (most DPS) group; for missiles optimal is the flight range.
+  const primaryIsMissile = groups[0]?.explosion_radius != null || (!groups.length && s.missile_explosion_radius > 0);
+  const ehpVs = Object.fromEntries(DAMAGE.map((d) => [d, n(s[`ehp_vs_${d}`], 0)]));
+  // Prop-off values only matter when a prop module changes them (e.g. MWD bloom, cloaky travel).
+  const noprop = [s.max_speed_noprop, s.align_time_noprop, s.signature_noprop].some((v) => typeof v === "number") &&
+    (s.max_speed_noprop !== s.max_speed || s.signature_noprop !== s.signature || s.align_time_noprop !== s.align_time);
   return {
     ...head,
     offense: {
@@ -204,16 +225,24 @@ export function formatStats(r: any, meta: { skillsUsed: string; assumedCharges?:
       weapon_dps: n(s.dps_weapon),
       drone_dps: n(s.dps_drone),
       volley: n(s.volley),
-      ...(turretOptimal ? {
+      weapon_volley: n(s.volley_weapon),
+      drone_volley: n(s.volley_drone),
+      ...(turretOptimal ? (primaryIsMissile ? { weapon_range_m: turretOptimal } : {
         weapon_optimal_m: turretOptimal,
         weapon_falloff_m: n(s.weapon_falloff, 0),
         weapon_tracking: n(s.weapon_tracking, 4),
+      }) : {}),
+      ...(s.missile_explosion_radius > 0 ? {
+        missile_explosion_radius_m: n(s.missile_explosion_radius),
+        missile_explosion_velocity_m_s: n(s.missile_explosion_velocity),
       } : {}),
+      ...(groups.length ? { weapon_groups: groups.map(weaponGroup) } : {}),
     },
     defense: {
       ehp: n(s.ehp_total, 0),
       ehp_vs: "omni damage (25% each type)",
       ehp_by_layer: Object.fromEntries(LAYERS.map((l) => [l, n(s[`ehp_${l}`], 0)])),
+      ...(Object.values(ehpVs).some((v) => v != null) ? { ehp_vs_single_damage_type: ehpVs } : {}),
       raw_hp: n(s.hp_total, 0),
       resists_percent: resists,
       sustained_tank_ehp_s: n(s.tank_sustained),
@@ -232,6 +261,13 @@ export function formatStats(r: any, meta: { skillsUsed: string; assumedCharges?:
       align_time_s: n(s.align_time, 2),
       signature_m: n(s.signature),
       warp_speed_au_s: n(s.warp_speed, 2),
+      ...(noprop ? {
+        without_prop_module: {
+          max_speed_m_s: n(s.max_speed_noprop),
+          align_time_s: n(s.align_time_noprop, 2),
+          signature_m: n(s.signature_noprop),
+        },
+      } : {}),
     },
     targeting: {
       lock_range_m: n(s.lock_range, 0),
@@ -245,6 +281,7 @@ export function formatStats(r: any, meta: { skillsUsed: string; assumedCharges?:
       calibration: resource(s, "calibration"),
       drone_bandwidth: resource(s, "drone_bandwidth"),
       drone_bay_m3: resource(s, "drone_bay"),
+      cargo_m3: resource(s, "cargo"),
       slots: s.slots,
       turret_hardpoints_free: s.turret_hardpoints_free,
       launcher_hardpoints_free: s.launcher_hardpoints_free,

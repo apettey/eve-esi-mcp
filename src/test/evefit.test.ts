@@ -61,6 +61,44 @@ test("stats are grouped and rounded", () => {
   assert.equal(s.mining_yield_m3_s, undefined);
 });
 
+test("additive @1 fields: weapon groups, volley split, single-type EHP, prop-off navigation, cargo", () => {
+  const r = {
+    ...RESULT,
+    stats: {
+      ...STATS, weapon_optimal: 42000, weapon_falloff: 1, volley_weapon: 80, volley_drone: 3.2,
+      missile_explosion_radius: 40.5, missile_explosion_velocity: 170.04,
+      ehp_vs_em: 2100.4, ehp_vs_thermal: 2600, ehp_vs_kinetic: 3100, ehp_vs_explosive: 3300,
+      max_speed_noprop: 456.25, align_time_noprop: 3.2, signature_noprop: 35,
+      cargo_used: 5, cargo_total: 140,
+    },
+    weapon_groups: [
+      { weapon: "Light Missile Launcher II", charge: "Scourge Light Missile", count: 2, dps: 40.123, hardpoint: "launcher",
+        optimal: 42000, falloff: 1, explosion_radius: 40.5, explosion_velocity: 170.04 },
+      { weapon: "125mm Gatling AutoCannon II", charge: null, count: 1, dps: 15, hardpoint: "turret",
+        optimal: 1200, falloff: 4000, tracking: 0.512345 },
+    ],
+  };
+  const s: any = formatStats(r, { skillsUsed: "" });
+  assert.equal(s.offense.weapon_range_m, 42000, "missile primary: range, not optimal/falloff");
+  assert.equal(s.offense.weapon_falloff_m, undefined);
+  assert.deepEqual([s.offense.weapon_volley, s.offense.drone_volley], [80, 3.2]);
+  assert.deepEqual([s.offense.missile_explosion_radius_m, s.offense.missile_explosion_velocity_m_s], [40.5, 170]);
+  assert.deepEqual(s.offense.weapon_groups, [
+    { weapon: "Light Missile Launcher II", charge: "Scourge Light Missile", count: 2, dps: 40.1,
+      range_m: 42000, explosion_radius_m: 40.5, explosion_velocity_m_s: 170 },
+    { weapon: "125mm Gatling AutoCannon II", count: 1, dps: 15, optimal_m: 1200, falloff_m: 4000, tracking: 0.5123 },
+  ]);
+  assert.deepEqual(s.defense.ehp_vs_single_damage_type, { em: 2100, thermal: 2600, kinetic: 3100, explosive: 3300 });
+  assert.deepEqual(s.navigation.without_prop_module, { max_speed_m_s: 456.3, align_time_s: 3.2, signature_m: 35 });
+  assert.deepEqual(s.fitting.cargo_m3, { used: 5, total: 140, free: 135, percent: 3.6 });
+});
+
+test("prop-off navigation is omitted when it equals the prop-on values", () => {
+  const s: any = formatStats({ ...RESULT, stats: { ...STATS, max_speed_noprop: 3240.5, align_time_noprop: 4.69, signature_noprop: 201.3 } }, { skillsUsed: "" });
+  assert.equal(s.navigation.without_prop_module, undefined);
+  assert.equal(s.offense.weapon_groups, undefined);
+});
+
 test("stable capacitor reports the stable level, not 1e9 seconds", () => {
   const s: any = formatStats({ ...RESULT, stats: { ...STATS, cap_stable: 1, cap_stable_pct: 81.2, cap_lasts_s: 1e9 } }, { skillsUsed: "" });
   assert.deepEqual(s.capacitor, { capacity_gj: 250, stable: true, stable_at_percent: 81.2, delta_gj_s: -0.83 });
