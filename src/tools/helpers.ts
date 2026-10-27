@@ -11,10 +11,12 @@ export const characterParam = z
 export interface Extra {
   /** Additional verbatim text blocks (e.g. EFT) so the model can copy them without JSON escaping. */
   texts?: string[];
+  /** Send the data as is, without dropping empty fields (for contracts another server consumes unchanged). */
+  raw?: boolean;
 }
 
 export function reply(data: unknown, extra: Extra = {}): CallToolResult {
-  const content: CallToolResult["content"] = [{ type: "text", text: JSON.stringify(compact(data), null, 1) }];
+  const content: CallToolResult["content"] = [{ type: "text", text: JSON.stringify(extra.raw ? data : compact(data), null, 1) }];
   for (const t of extra.texts ?? []) content.push({ type: "text", text: t });
   return { content };
 }

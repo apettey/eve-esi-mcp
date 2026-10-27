@@ -3,6 +3,7 @@ import { CharacterStore, type StoredCharacter } from "./auth/store.js";
 import { Sso } from "./auth/sso.js";
 import { Esi } from "./esi/client.js";
 import { Resolver } from "./esi/resolver.js";
+import { Zkill } from "./zkill.js";
 import { SdeManager } from "./sde/manager.js";
 import type { Sde } from "./sde/db.js";
 
@@ -13,6 +14,7 @@ export class Ctx {
   readonly esi: Esi;
   readonly sdeManager: SdeManager;
   readonly resolver: Resolver;
+  readonly zkill: Zkill;
 
   constructor(readonly cfg: Config) {
     this.store = new CharacterStore(cfg.home);
@@ -20,6 +22,7 @@ export class Ctx {
     this.esi = new Esi(cfg, this.sso);
     this.sdeManager = new SdeManager(cfg);
     this.resolver = new Resolver(cfg.home, this.esi, () => this.sde());
+    this.zkill = new Zkill(cfg.userAgent);
   }
 
   sde(): Promise<Sde> {

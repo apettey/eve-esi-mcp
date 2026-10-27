@@ -20,6 +20,7 @@ An [MCP](https://modelcontextprotocol.io) server for EVE Online's [ESI API](http
 | Market & money | `market_prices`, `appraise`, `market_orders` (with undercut detection), `wallet`, `contracts` |
 | Industry | `industry` (jobs and blueprints), `planets` (PI extractor timers, storage) |
 | Comms | `mail_list`, `mail_read`, `mail_send`, `notifications`, `killmails` (fits of losses as EFT) |
+| Enemy doctrines | `doctrine_from_killmails` (zKillboard URLs, filters or killmail ids), `doctrine_from_battle_report` (both sides of a fight), as bundles for eve-fit's `save_doctrine` |
 | Game client | `ui_action` (set destination, add waypoint, open market or info windows) |
 | Anything else | `esi_request` (any ESI route; handles auth and paging, and adds `*_name` fields next to IDs) |
 
@@ -64,6 +65,29 @@ eve-esi-mcp starts eve-fit as a child MCP server the first time a fitting tool n
 In-game saved fittings keep ammo in cargo, and ships in assets often have empty guns, so on its own the engine would report 0 weapon DPS for most real fits. To avoid that, every turret and launcher without a charge is loaded, for the engine's calculation only, with a compatible charge from the fit's cargo. A charge is compatible when its charge group matches and, for turrets, its size matches. The largest stack wins. For `ship_fitting`, the ship's real cargo hold is used even with `include_cargo: false`. `stats.assumed_charges` lists what was loaded (e.g. `200mm AutoCannon II x3: Republic Fleet EMP S (from cargo)`), and `stats.unloaded_weapons` lists weapons with nothing compatible in cargo. The displayed slots, EFT and DNA still show the fit exactly as it is. Pass `load_cargo_ammo: false` to turn this off.
 
 To enable it, set `EVE_FIT_DIR` to an eve-fit-mcp checkout (commit 03e5b41 or newer) that has a `.venv`, or set `EVE_FIT_COMMAND`/`EVE_FIT_ARGS` to launch it some other way. A checkout named `eve-fit-mcp` next to this package is detected automatically. The very first start builds eve-fit's game data and item index, which takes about 30 s. Later starts take a few seconds, and each fit then takes milliseconds. eve-esi-mcp keeps the only ESI tokens; eve-fit's own ESI login isn't used.
+
+### Enemy doctrines from killmails
+
+`doctrine_from_killmails` and `doctrine_from_battle_report` turn public killmails into doctrine bundles: the hulls a group flies, the unique pilots seen in each, one EFT per loss and the weapons seen on their kills. The model passes a bundle unchanged to eve-fit's `save_doctrine(**bundle)`, then uses `analyze_doctrine`, `fleet_battle` or `counter_fit` there. The shape is a contract shared with eve-fit-mcp (its `docs/INTEGRATION.md`, "Doctrine bundle"). Fields are only ever added, and each addition is agreed with eve-fit first.
+
+```jsonc
+{
+  "name": "Fraternity. comp",
+  "description": "From 40 zKillboard killmails, ... Pilots counted: Fraternity. ...",
+  "source": { "type": "zkillboard", "url": "https://zkillboard.com/alliance/99003581/", "kill_ids": [139468949, ...], "fetched_at": "2026-10-27T11:04:40Z" },
+  "ships": [
+    { "ship": "Harbinger", "label": "Harbinger", "count": 4, "efts": ["[Harbinger, km 139468923]\n...", ...], "pilots_seen": 4 },
+    { "ship": "Caracal Navy Issue", "label": "Caracal Navy Issue", "count": 7, "efts": [], "pilots_seen": 7,
+      "weapons_seen": ["Caldari Navy Scourge Light Missile", "Inferno Rage Heavy Assault Missile"] }
+  ]
+}
+```
+
+- `count` is the number of unique pilots in that hull, victims and attackers. Capsules, NPCs and structures are left out.
+- Each EFT shows a loss as it was flown: fitted modules with their loaded charges (command burst charges included), drones up to the hull's bandwidth and five in space, and fighters in tubes. Cargo, implants, the rest of the drone bay and anything past the hull's racks are dropped, because eve-fit rejects fits that don't fit the hull. A hull seen only among attackers has `efts: []`, which eve-fit keeps as a bare-hull placeholder.
+- `doctrine_from_killmails` takes zKillboard list URLs (`/alliance/<id>/`, `/corporation/<id>/losses/`, `/ship/<id>/`, ...), filters (`alliance`, `corporation`, `character`, `ship`, `side`, `past_hours` up to 7 days) or killmail id+hash pairs. The killmails themselves are read from ESI. It counts the pilots of the entity in the URL or filter, or of `members_of`. With neither (a ship or system feed, or a list of kills), it counts the victims' alliances or corporations.
+- `doctrine_from_battle_report` takes a zKillboard related URL (`zkillboard.com/related/<system>/<YYYYMMDDHH00>/`), a `br.evetools.org/related/...` URL, or `system` + `time`. It returns `{"sides": [bundle_A, bundle_B]}`, using zKillboard's split of the pilots into sides. It reads up to `fits_per_hull` losses (default 5) per hull and side. zKillboard has no batch lookup for killmail hashes, so each loss it reads costs one zKillboard request.
+- zKillboard is called with the same User-Agent as ESI, through a short in-memory cache, with at most three requests at a time.
 
 ## Setup
 
@@ -144,6 +168,7 @@ node dist/index.js characters       # list stored characters
 - `fitting_save`, `fitting_delete`, `mail_send`, `ui_action`, `route_plan` with `set_destination`, and non-GET `esi_request` calls change things in your account or game client. The tool descriptions tell the model to confirm with you first.
 - Wormhole class, system effects with their modifiers, and wormhole type attributes (destination, mass, lifetime) come from the SDE. The SDE doesn't list statics, so these come from [WormholeSystems](https://github.com/WormholeSystems/WormholeSystems) (`data/static/wormhole_systems.json`, MIT licence, © 2026 WormholeSystems), vendored in [`src/sde/wormhole-statics.ts`](src/sde/wormhole-statics.ts). Run `node scripts/update-wormhole-statics.mjs` to refresh it.
 - Fitting resource numbers in `resources` come from static data, so skills, rigs and module bonuses aren't applied. For exact stats, configure eve-fit (see above).
+- The doctrine tools read public data only (zKillboard's API and public ESI killmails). No character or token is involved.
 - With eve-fit enabled, a character's skill levels and implant type ids are sent to the local eve-fit process for each fit. Nothing is stored there, and no tokens are shared.
 
 ## Development
