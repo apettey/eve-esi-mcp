@@ -89,6 +89,16 @@ To enable it, set `EVE_FIT_DIR` to an eve-fit-mcp checkout (commit 03e5b41 or ne
 - `doctrine_from_battle_report` takes a zKillboard related URL (`zkillboard.com/related/<system>/<YYYYMMDDHH00>/`), a `br.evetools.org/related/...` URL, or `system` + `time`. It returns `{"sides": [bundle_A, bundle_B]}`, using zKillboard's split of the pilots into sides. It reads up to `fits_per_hull` losses (default 5) per hull and side. zKillboard has no batch lookup for killmail hashes, so each loss it reads costs one zKillboard request.
 - zKillboard is called with the same User-Agent as ESI, through a short in-memory cache, with at most three requests at a time.
 
+### Wormhole rollers
+
+A fit counts as a roller when its name or description mentions rolling, it has a Higgs Anchor rig, or it carries more than one prop module. `fitting_get`, `ship_fitting` and `fitting_analyze` then add a `rolling` section. It gives the hull mass and the jump mass cold (no prop running) and hot with each prop module, since prop modules add mass only while they run. Plates and Higgs Anchors are included. It also gives roller advice:
+
+- Fit the biggest microwarpdrive. It adds the most mass and is the fastest way back to the hole.
+- Back it up with an afterburner of the same size. A warp scrambler shuts the MWD off, but the afterburner still runs and adds the same mass, so you can still jump hot and crush the hole.
+- A smaller prop module (e.g. a 500MN MWD on a capital) adds about a tenth of the mass and is flagged as probably not worth the slot.
+
+The masses come from static data, so check them in game or in Pyfa before relying on exact numbers.
+
 ## Setup
 
 ### 1. Register an EVE application

@@ -21,3 +21,7 @@ Notes on work that has been identified but not done yet. Remove an entry once it
   eve-fit may value them differently from the real module.
 - Doctrine tools: there is one bundle entry per hull. Different fits of the same hull (e.g. HAM and rapid-light
   Caracals) are merged by eve-fit's consensus. Splitting them into labelled variants would need a contract addition.
+- Roller jump mass (`rolling` in the fitting tools) is computed from static attributes, not the fitting engine. The
+  Higgs Anchor is assumed to scale the total after plates and prop modules add theirs. This hasn't been checked
+  against an in-game ship or a Pyfa mass readout yet. eve-fit's `evaluate_fit` doesn't report mass; if it starts to,
+  use that instead.

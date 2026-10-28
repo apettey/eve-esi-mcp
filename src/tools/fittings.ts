@@ -174,7 +174,8 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
       description:
         "Full detail for saved fittings, by id, name or ship: modules per slot by name, loaded charges, drones/cargo, CPU/PG/calibration " +
         "usage vs ship output, hardpoints, ship stats and bonuses, attributes of every module, a skill check against the character " +
-        "(missing skills + training time), plus EFT (ready for in-game import or Pyfa) and DNA.",
+        "(missing skills + training time), plus EFT (ready for in-game import or Pyfa) and DNA. Wormhole roller fits also get " +
+        "cold/hot jump mass per prop module and roller advice.",
       inputSchema: {
         fittings: z.array(z.union([z.string(), z.number()])).min(1).max(10).describe("Fitting ids, names (substring) or ship names."),
         character: characterParam,
@@ -304,7 +305,8 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
       description:
         "Parses any EFT text (from the user, Pyfa, zKillboard, ...) and returns the same rich breakdown as fitting_get: resolved names, " +
         "resource usage, ship stats/bonuses, module attributes, skill check against a character and DNA, plus engine stats " +
-        "(EHP, DPS, cap, speed, real CPU/PG) when eve-fit is configured. Does not save anything.",
+        "(EHP, DPS, cap, speed, real CPU/PG) when eve-fit is configured, and jump mass + advice for wormhole roller fits. " +
+        "Does not save anything.",
       inputSchema: {
         eft: z.string().describe("EFT text starting with [Ship, Name]."),
         character: characterParam,
