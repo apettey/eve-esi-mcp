@@ -11,7 +11,7 @@ import { connect, testCtx } from "./harness.js";
  * listed tool gains one, so remove it from here when you do.
  */
 const UNTESTED = new Set([
-  "appraise", "assets", "character_login", "character_overview", "character_skills", "contracts",
+  "assets", "character_login", "character_overview", "character_skills", "contracts",
   "doctrine_from_battle_report", "doctrine_from_killmails", "fitting_analyze", "fitting_get", "fitting_save",
   "fittings_list", "industry", "item_info", "killmails", "lookup", "mail_list", "mail_read", "mail_send",
   "market_orders", "market_prices", "notifications", "planets", "route_plan", "ship_fitting", "skill_check",

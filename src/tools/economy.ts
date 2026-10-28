@@ -180,7 +180,8 @@ export function registerEconomyTools(server: McpServer, ctx: Ctx) {
       title: "Appraise a list of items",
       description:
         "Values free-form item text at a market (default Jita 4-4): EFT fits, in-game inventory/cargo copy-paste (tab separated), " +
-        "'Item x10', '10 Item' lines. Returns per-item buy/sell unit and totals, volume, and unrecognized lines.",
+        "'Item x10', '10 Item' lines. Returns per-item buy/sell unit and totals, volume, and unrecognized lines. " +
+        "Items with no sell (or buy) orders at the market are named in the totals, with an estimate using the universe average.",
       inputSchema: {
         text: z.string().describe("The item list or EFT fit."),
         location: z.string().optional().describe("Market location (default 'jita')."),
