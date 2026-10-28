@@ -7,6 +7,12 @@ Notes on work that has been identified but not done yet. Remove an entry once it
 - `ui_action` (set destination, waypoints, open windows) needs the character to be online in the game client.
 - `mail_send` has only been tested on its error path (unknown recipients); no mail has actually been sent.
 
+## Tools without handler tests
+
+The tool-test harness (`src/test/harness.ts`) arrived after most tools. The tools in `UNTESTED` in
+`src/test/tools.test.ts` still need handler tests, and the list may only shrink. Priorities: the write tools
+(`fitting_save`, `mail_send`) and the composites the model uses most (`character_overview`, `assets`, `fitting_get`).
+
 ## Known gaps
 
 - Alpha/omega: ESI has no clone-state field. `character_overview` and `character_skills` infer it from training

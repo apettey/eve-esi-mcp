@@ -7,6 +7,9 @@ id comes back with a name, and values use the game's units. See the README for s
 
 - Adding or changing a tool, wrapping a new ESI route, or adding SDE data: follow the `adding-eve-tools` skill
   (`.claude/skills/adding-eve-tools/`). It explains the design principles and has code recipes.
+- Every change to `src/` ships with tests in the same commit: follow the `testing-eve-esi` skill
+  (`.claude/skills/testing-eve-esi/`). Tools are tested through the in-process MCP harness (`src/test/harness.ts`)
+  with a fake ESI, and `npm test` fails for a registered tool without a test. Bug fixes start with a failing test.
 - Verifying a change against live ESI or the user's character: follow the `live-testing-eve-esi` skill. In short:
   `node scripts/smoke.mjs`, one process per character at a time (SSO refresh tokens rotate), read-only unless asked,
   and clean up any test objects.
@@ -16,7 +19,7 @@ id comes back with a name, and values use the game's units. See the README for s
 
 ```bash
 npm run build                       # tsc -> dist/
-npm test                            # node:test; SDE-backed tests skip without a local index
+npm test                            # builds, then node:test; SDE-backed tests skip without a local index (CI has one)
 node scripts/smoke.mjs '<calls>'    # drive the built server over stdio
 node dist/index.js sde-update       # refresh the local static data index
 ```

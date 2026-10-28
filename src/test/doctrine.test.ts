@@ -1,9 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { loadConfig } from "../config.js";
-import { Sde } from "../sde/db.js";
+import { sde, withSde } from "./harness.js";
 import { type Killmail, buildDoctrine, dronesInSpace, lossEft } from "../doctrine.js";
 import { shipSlotCounts } from "../fit/model.js";
 import { parseZkillUrl, relatedTime } from "../zkill.js";
@@ -31,18 +28,6 @@ test("battle times floor to the hour in UTC", () => {
   assert.throws(() => relatedTime("yesterday"), /Unreadable/);
 });
 
-function openSde(): Sde | null {
-  try {
-    const pointer = join(loadConfig().home, "sde-current.json");
-    if (!existsSync(pointer)) return null;
-    const p = JSON.parse(readFileSync(pointer, "utf8"));
-    return existsSync(p.path) ? new Sde(p.path) : null;
-  } catch {
-    return null;
-  }
-}
-const sde = openSde();
-const withSde = sde ? test : test.skip;
 const id = (name: string) => {
   const t = sde!.typeIdByName(name);
   assert.ok(t, `type ${name}`);

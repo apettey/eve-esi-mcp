@@ -1,0 +1,36 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      # Tests that need static data skip without an index, so CI builds one (cached per week and schema).
+      EVE_ESI_MCP_HOME: ${{ github.workspace }}/.eve-esi-mcp
+      EVE_FIT_COMMAND: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - id: week
+        run: echo "week=$(date +%G-%V)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: .eve-esi-mcp
+          key: sde-${{ hashFiles('src/sde/build.ts') }}-${{ steps.week.outputs.week }}
+          restore-keys: sde-${{ hashFiles('src/sde/build.ts') }}-
+      - name: Build static data index
+        run: node dist/index.js sde-update
+      - name: Test (no test may skip in CI)
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test.log
+          if grep -E '^ℹ skipped [1-9]' test.log; then echo "::error::Tests skipped: the SDE index is missing or stale"; exit 1; fi

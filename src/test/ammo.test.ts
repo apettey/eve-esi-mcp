@@ -1,8 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-import { loadConfig } from "../config.js";
+import { sde, withSde } from "./harness.js";
 import { CATEGORY, Sde } from "../sde/db.js";
 import { chargeFits, loadCargoAmmo } from "../fit/ammo.js";
 import { CONTRACT, FitStats, type FitEngine } from "../fit/evefit.js";
@@ -67,18 +65,6 @@ test("assumed charges are reported in stats", async () => {
 });
 
 // With the real SDE (run the server or `eve-esi-mcp sde-update` once).
-function openSde(): Sde | null {
-  try {
-    const pointer = join(loadConfig().home, "sde-current.json");
-    if (!existsSync(pointer)) return null;
-    const p = JSON.parse(readFileSync(pointer, "utf8"));
-    return existsSync(p.path) ? new Sde(p.path) : null;
-  } catch {
-    return null;
-  }
-}
-const sde = openSde();
-const withSde = sde ? test : test.skip;
 
 withSde("real charge groups and sizes match", () => {
   const id = (name: string) => sde!.searchTypes(name)[0].id;

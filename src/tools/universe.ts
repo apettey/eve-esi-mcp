@@ -350,7 +350,8 @@ export function registerUniverseTools(server: McpServer, ctx: Ctx) {
       title: "Plan a route",
       description:
         "Plans a stargate route and returns every system with security and region, a security breakdown, and recent kills along the way. " +
-        "Origin defaults to the character's current system. Optionally sets the in-game autopilot destination.",
+        "Origin defaults to the character's current system. Optionally sets the in-game autopilot destination " +
+        "(set_destination changes the game client: confirm with the user first).",
       inputSchema: {
         to: z.string().describe("Destination system (name or id)."),
         from: z.string().optional().describe("Origin system; defaults to the character's current location."),
