@@ -13,3 +13,7 @@ Notes on work that has been identified but not done yet. Remove an entry once it
   speed (alphas train at 50%) and from skills capped below their trained level. A character with a paused or empty
   queue and no capped skills gets no verdict.
 - Skill queues are read-only in ESI, so plans (e.g. from `skill_check`) have to be pasted into the client by hand.
+- Roller jump mass (`rolling` in the fitting tools) is computed from static attributes, not the fitting engine. The
+  Higgs Anchor is assumed to scale the total after plates and prop modules add theirs. This hasn't been checked
+  against an in-game ship or a Pyfa mass readout yet. eve-fit's `evaluate_fit` doesn't report mass; if it starts to,
+  use that instead.

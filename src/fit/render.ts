@@ -2,6 +2,7 @@ import { ATTR, CATEGORY, type Sde } from "../sde/db.js";
 import { describeRequirements, requirementClosure, skillGaps, type CharacterSkills } from "../skills.js";
 import { round } from "../util.js";
 import { shipSlotCounts, toDna, toEft, type Fit, type SlotKind } from "./model.js";
+import { rollingAnalysis } from "./rolling.js";
 
 export type AttributeDetail = "none" | "summary" | "full";
 
@@ -215,6 +216,7 @@ export function renderFit(
     cargo: fit.cargo.map((c) => ({ name: sde.typeName(c.type_id), quantity: c.quantity })),
     resources,
     ...(opts.stats ? { stats: opts.stats } : opts.statsNote ? { stats_note: opts.statsNote } : {}),
+    rolling: rollingAnalysis(sde, fit),
     modules,
     charges_and_drones: extras,
     skill_check: skillCheck

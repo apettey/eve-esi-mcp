@@ -65,6 +65,16 @@ In-game saved fittings keep ammo in cargo, and ships in assets often have empty 
 
 To enable it, set `EVE_FIT_DIR` to an eve-fit-mcp checkout (commit 03e5b41 or newer) that has a `.venv`, or set `EVE_FIT_COMMAND`/`EVE_FIT_ARGS` to launch it some other way. A checkout named `eve-fit-mcp` next to this package is detected automatically. The very first start builds eve-fit's game data and item index, which takes about 30 s. Later starts take a few seconds, and each fit then takes milliseconds. eve-esi-mcp keeps the only ESI tokens; eve-fit's own ESI login isn't used.
 
+### Wormhole rollers
+
+A fit counts as a roller when its name or description mentions rolling, it has a Higgs Anchor rig, or it carries more than one prop module. `fitting_get`, `ship_fitting` and `fitting_analyze` then add a `rolling` section. It gives the hull mass and the jump mass cold (no prop running) and hot with each prop module, since prop modules add mass only while they run. Plates and Higgs Anchors are included. It also gives roller advice:
+
+- Fit the biggest microwarpdrive. It adds the most mass and is the fastest way back to the hole.
+- Back it up with an afterburner of the same size. A warp scrambler shuts the MWD off, but the afterburner still runs and adds the same mass, so you can still jump hot and crush the hole.
+- A smaller prop module (e.g. a 500MN MWD on a capital) adds about a tenth of the mass and is flagged as probably not worth the slot.
+
+The masses come from static data, so check them in game or in Pyfa before relying on exact numbers.
+
 ## Setup
 
 ### 1. Register an EVE application
