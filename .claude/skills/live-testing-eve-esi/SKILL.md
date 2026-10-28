@@ -5,9 +5,12 @@ description: How to exercise the eve-esi-mcp server against live ESI and a real 
 
 # Live-testing eve-esi-mcp
 
-Unit tests cover parsers and formatters. Real ESI data finds the rest: T3 subsystem counts, ESI list caching after
-writes, assets in asset safety, 236-fit accounts, Windows file locking. Live testing is part of shipping any change
-to tool output.
+Unit tests (the `testing-eve-esi` skill) cover tool output against faked ESI responses. Real ESI data finds the
+rest: T3 subsystem counts, ESI list caching after writes, assets in asset safety, 236-fit accounts, Windows file
+locking. Live testing is part of shipping any change to tool output, and comes after `npm test` passes.
+
+When a live run turns up a bug, copy the real ESI response shape (trimmed, ids anonymised) into `FakeEsi` routes in
+a unit test that fails, then fix it. That way the bug can't come back unnoticed.
 
 ## The harness
 

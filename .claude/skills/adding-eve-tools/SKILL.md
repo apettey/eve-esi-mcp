@@ -73,29 +73,35 @@ Keep that spirit with every change. A tool that "works" but returns `type_id: 20
    tool or make a new one, whether the tool writes anything, which defaults decide what most answers look like
    (Jita vs region-wide prices), or anything that needs a scope outside the standard preset. This takes two minutes
    and prevents most redesigns.
-2. **Extend before adding.** Check `src/tools/*.ts` (and the tool list in `src/index.ts` `INSTRUCTIONS`). A new
+2. **Extend before adding.** Check `src/tools/*.ts` (and the tool list in `INSTRUCTIONS` in `src/server.ts`). A new
    `include`/`mode` option on an existing tool often beats a new tool: every tool adds to the model's context and
    to the choice it has to make. Add a new tool when the question is genuinely different. If it belongs to no
    existing area (e.g. the first corporation tool), create `src/tools/<area>.ts` exporting
-   `register<Area>Tools(server, ctx)` and call it from `buildServer` in `src/index.ts`.
+   `register<Area>Tools(server, ctx)` and call it from `buildServer` in `src/server.ts`.
 3. **Find the data.** ESI: read the route in the live spec. The patterns reference has a snippet that prints a
    route's parameters, response shape, scope, required roles, rate-limit group and compatibility date. If the route's
    `x-compatibility-date` is newer than `COMPATIBILITY_DATE` in `src/config.ts`, review `/meta/changelog` before
    bumping it. Static data: check whether the SDE index already has it (`src/sde/db.ts`); if not, extend
    `src/sde/build.ts` and bump `SDE_SCHEMA_VERSION`.
-4. **Implement** in the matching `src/tools/<area>.ts` using the recipes in
+4. **Implement with a test** in the matching `src/tools/<area>.ts` using the recipes in
    [references/patterns.md](references/patterns.md) — read it before writing the handler. Register new tool groups in
-   `src/index.ts` and mention new tools in `INSTRUCTIONS` if they change how the model should approach things.
+   `buildServer` (`src/server.ts`) and mention new tools in `INSTRUCTIONS` there if they change how the model should
+   approach things. Write the handler test in `src/test/tools-<area>.test.ts` as soon as the handler returns
+   something (follow the `testing-eve-esi` skill): `callTool` with a fake ESI shows you the exact output the model
+   will get, long before a live run. `npm test` fails for a registered tool without a test, so this isn't optional.
 5. **Scopes.** First check whether the scope is already in a preset in `src/auth/scopes.ts`. If not, add it:
    `STANDARD_SCOPES` for personal data most players want; `FULL_SCOPES` for corporation/alliance scopes and anything
    that needs in-game roles. Mention it in the README's app-registration note. Existing logins won't have it until
    they log in again, so the tool must fail with the actionable scope error, not a crash.
-6. **Test.** Unit tests in `src/test/` for pure logic (parsers, formatters, matching); `npm run build && npm test`.
-   Then drive it live with the `live-testing-eve-esi` skill — real ESI data finds the bugs unit tests don't (we found
-   T3 subsystem counts, stale caches and a Windows rename bug that way).
+6. **Test.** Cover the failure paths too (missing scope, unknown name, an ESI error in one section) and any pure
+   logic you added (parsers, formatters, matching); `npm test` builds and runs everything. Then drive it live with
+   the `live-testing-eve-esi` skill — real ESI data finds the bugs unit tests don't (we found T3 subsystem counts,
+   stale caches and a Windows rename bug that way). When live testing finds a bug, add a unit test reproducing it
+   before fixing it.
 7. **Document.** Add the tool to the README tools table; remove anything it completes from `docs/ROADMAP.md`, and
    add any known gap you're leaving behind.
-8. **Ship.** Commit on a branch and open a PR describing what was tested live and what wasn't.
+8. **Ship.** Commit code and tests together on a branch and open a PR listing what is unit-tested, what was tested
+   live, and what wasn't. CI runs `npm test` with a fresh SDE index on every PR.
 
 ## Before you call it done
 
@@ -107,4 +113,6 @@ Keep that spirit with every change. A tool that "works" but returns `type_id: 20
 - [ ] Output is bounded (limit, total, truncation hint) on a large account (thousands of assets, hundreds of fits)
 - [ ] Write tools: annotations set, description says to confirm, live-tested with a throwaway object that was cleaned up
 - [ ] Description leads with the question it answers and names related tools
-- [ ] `npm test` passes; live-tested; README and ROADMAP updated
+- [ ] Handler test in `src/test/tools-<area>.test.ts` covering the happy path and the likely failure; tool not added
+      to `UNTESTED` (and removed from it if you touched a listed tool)
+- [ ] `npm test` passes with no new skips; live-tested; README and ROADMAP updated

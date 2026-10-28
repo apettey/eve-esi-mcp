@@ -382,7 +382,7 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
     "fitting_delete",
     {
       title: "Delete a saved fitting",
-      description: "Deletes one saved in-game fitting by id or exact name. Only do this when the user explicitly asks.",
+      description: "Deletes one saved in-game fitting by id or exact name. Only do this when the user explicitly asks, and confirm with the user first.",
       inputSchema: {
         fitting: z.union([z.number(), z.string()]).describe("Fitting id or exact name."),
         character: characterParam,

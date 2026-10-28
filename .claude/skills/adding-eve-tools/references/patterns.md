@@ -22,7 +22,8 @@ Recipes for the building blocks every tool uses. Copy the shape and keep the sty
 
 | Path | What |
 | --- | --- |
-| `src/tools/<area>.ts` | Tool registrations, grouped by area (`characters`, `character`, `assets`, `fittings`, `universe`, `economy`, `industry`, `comms`, `raw`) |
+| `src/tools/<area>.ts` | Tool registrations, grouped by area (`characters`, `character`, `assets`, `fittings`, `universe`, `economy`, `industry`, `comms`, `doctrine`, `raw`) |
+| `src/server.ts` | `buildServer` (registers every area) and the server `INSTRUCTIONS` |
 | `src/tools/helpers.ts` | `characterParam`, `reply`, `handler`, `section`, `READ_ONLY` |
 | `src/context.ts` | `Ctx`: `ctx.esi`, `ctx.sde()`, `ctx.resolver`, `ctx.character()`, `ctx.maybeCharacter()`, `ctx.store`, `ctx.sso` |
 | `src/esi/client.ts` | `Esi`: `get`, `post`, `request`, `getAllPages`, `tryGet`, `requireScope` |
@@ -33,6 +34,7 @@ Recipes for the building blocks every tool uses. Copy the shape and keep the sty
 | `src/market.ts`, `src/skills.ts` | Market scope/summary/appraisal; skill loading, requirement closure, training time |
 | `src/util.ts` | `UserError`, `mapLimit`, `chunk`, `unique`, `isk`, `duration`, `round`, `norm`, `compact`, `stripHtml` |
 | `src/auth/scopes.ts` | Scope presets offered at login |
+| `src/test/harness.ts` | Test helpers: `testCtx`, `FakeEsi`, `callTool`, `character`, `esiError`, `sde`/`withSde` |
 
 ## Reading the ESI spec
 
@@ -226,8 +228,37 @@ description: "... Confirm with the user before saving.",
 
 ## Tests
 
-- Pure logic: `src/test/*.test.ts` with `node:test`. SDE-backed tests use the `withSde` guard in `core.test.ts`,
-  so they skip when no index exists.
-- External processes (eve-fit) get a fake client in tests (`src/test/evefit.test.ts`), so `npm test` never needs
-  them.
+The `testing-eve-esi` skill has the full guide. The short version for the `standings` skeleton above:
+
+```ts
+// src/test/tools-<area>.test.ts
+import { callTool, character, testCtx, withSde } from "./harness.js";
+
+const PILOT = character(90000401, "Standings Pilot");
+
+withSde("standings are named and sorted best first", async () => {
+  const ctx = testCtx({
+    characters: [PILOT],
+    esi: {
+      [`/characters/${PILOT.id}/standings`]: [
+        { from_id: 500001, from_type: "faction", standing: 5.5 },
+        { from_id: 500002, from_type: "faction", standing: -2 },
+      ],
+    },
+  });
+  const r = await callTool(ctx, "standings", {});
+  assert.equal(r.isError, false, r.text);
+  assert.equal(r.json.character, "Standings Pilot");
+  assert.deepEqual(r.json.standings.map((s: any) => s.name), ["Caldari State", "Minmatar Republic"]);
+});
+
+withSde("standings without the scope says which preset grants it", async () => {
+  const ctx = testCtx({ characters: [character(90000402, "No Scopes", [])] });
+  assert.match((await callTool(ctx, "standings", {})).text, /"standard" scope preset/);
+});
+```
+
+- `src/test/tools.test.ts` fails for any registered tool without a handler test, checks that every tool has a
+  title, description and annotations, and that write tools say "confirm". Add new write tools to `GAME_WRITES` there.
+- External processes (eve-fit, zKillboard, SSO) get fakes, so `npm test` never needs them.
 - Live behaviour: see the `live-testing-eve-esi` skill.

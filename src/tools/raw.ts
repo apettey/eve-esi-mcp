@@ -69,7 +69,7 @@ export function registerRawTools(server: McpServer, ctx: Ctx) {
       description:
         "Acts on the running EVE client of the character (must be logged in to the game): set autopilot destination or add a waypoint " +
         "(system, NPC station or structure), open the market window for an item, or open the show-info window for an item/character/" +
-        "corporation/alliance.",
+        "corporation/alliance. This changes the game client: confirm with the user first.",
       inputSchema: {
         action: z.enum(["set_destination", "add_waypoint", "open_market", "open_info"]),
         target: z.union([z.string(), z.number()]).describe("System/station name or id, structure id, item name, or entity name/id."),
