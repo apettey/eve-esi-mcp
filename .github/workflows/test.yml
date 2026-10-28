@@ -33,4 +33,5 @@ jobs:
         run: |
           set -o pipefail
           npm test 2>&1 | tee test.log
-          if grep -E '^ℹ skipped [1-9]' test.log; then echo "::error::Tests skipped: the SDE index is missing or stale"; exit 1; fi
+          # Without a TTY node prints TAP ("# skipped N"); in a terminal, the spec reporter ("ℹ skipped N").
+          if grep -E '^(#|ℹ) skipped [1-9]' test.log; then echo "::error::Tests skipped: the SDE index is missing or stale"; exit 1; fi
