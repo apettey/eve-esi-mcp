@@ -13,3 +13,11 @@ Notes on work that has been identified but not done yet. Remove an entry once it
   speed (alphas train at 50%) and from skills capped below their trained level. A character with a paused or empty
   queue and no capped skills gets no verdict.
 - Skill queues are read-only in ESI, so plans (e.g. from `skill_check`) have to be pasted into the client by hand.
+- Doctrine tools: saved battle reports (`br.evetools.org/br/...` and `/battle/...`, `zkillboard.com/br/...`) aren't
+  read. Only related links, or system + time, are. br.evetools.org has no documented public API, so reading saved
+  reports needs a documented endpoint or its maintainers' OK. Custom side assignments made on a saved report are lost
+  for the same reason.
+- Doctrine tools: abyssal (mutated) modules are emitted under their base type name without the mutaplasmid rolls, so
+  eve-fit may value them differently from the real module.
+- Doctrine tools: there is one bundle entry per hull. Different fits of the same hull (e.g. HAM and rapid-light
+  Caracals) are merged by eve-fit's consensus. Splitting them into labelled variants would need a contract addition.

@@ -14,6 +14,7 @@ import { registerEconomyTools } from "./tools/economy.js";
 import { registerIndustryTools } from "./tools/industry.js";
 import { registerCommsTools } from "./tools/comms.js";
 import { registerRawTools } from "./tools/raw.js";
+import { registerDoctrineTools } from "./tools/doctrine.js";
 
 const INSTRUCTIONS = `EVE Online ESI server. Everything comes back with names resolved (items, systems, stations, structures,
 characters, corporations), so you rarely need to look ids up yourself.
@@ -29,6 +30,8 @@ Prefer the composite tools — they each replace many raw ESI calls:
   attributes, skill check and EFT text. With eve-fit-mcp configured they also include engine \`stats\` (EHP/resists, DPS,
   cap, speed, skill-applied CPU/PG) calculated with the character's real skills.
 - item_info / search_items / skill_check / market_prices / appraise / route_plan / system_info (incl. wormhole class/effect/statics) / wormhole_type / lookup.
+- doctrine_from_killmails / doctrine_from_battle_report: enemy comps (hulls, pilots, loss EFTs, weapons) from zKillboard
+  URLs, filters or battle reports, as bundles to pass unchanged to eve-fit's save_doctrine.
 - esi_request covers any remaining ESI route.
 Static data (items, attributes, systems) is served locally; the first call after install may take ~1 minute while
 the official SDE is downloaded and indexed.
@@ -45,6 +48,7 @@ function buildServer(ctx: Ctx): McpServer {
   registerEconomyTools(server, ctx);
   registerIndustryTools(server, ctx);
   registerCommsTools(server, ctx);
+  registerDoctrineTools(server, ctx);
   registerRawTools(server, ctx);
   return server;
 }
