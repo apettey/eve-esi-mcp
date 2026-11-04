@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { piData } from "../pi.js";
 import { CC_LEVELS, LINK_RESERVE, layoutCapacity, layoutCost, layoutFits, pinCosts, simulate, type Layout } from "../pi-layout.js";
 import { callTool, character, sde, testCtx, withSde } from "./harness.js";
+import { checkTemplate } from "./pi-template-check.js";
 
 const JITA_44 = 60003760;
 const id = (name: string) => sde!.typeIdByName(name)!;
@@ -90,6 +91,32 @@ withSde("pi_colony_calc suggests the best addition that still fits", async () =>
   assert.equal(r.json.fits, true);
   assert.deepEqual(r.json.factories, ["Toxic Metals (P1) x4: 100% busy"]);
   assert.match(r.json.suggestions[0], /^add 1 Basic Industry Facility \(Toxic Metals\): \+.* ISK\/day \(still fits\)$/);
+  // The build sheet: what to place, routes, each visit, and the surplus P0 warning.
+  const steps: string[] = r.json.setup;
+  assert.match(steps[0], /^Command center at level 5\. Place 1 Launchpad, 1 Storage Facility, 2 Extractor Control Units, 4 Basic Industry Facilities;/);
+  assert.match(steps[1], /^Extractor 1: Heavy Metals, 8 heads .* 1-day program \(15 min cycles\), about 25,000\/h\. Route its Heavy Metals to the launchpad\.$/);
+  assert.ok(steps.some((x) => /^4 x Basic Industry Facility on schematic Toxic Metals: route 3,000 Heavy Metals per cycle from the launchpad to each of the 4/.test(x)), steps.join(" | "));
+  assert.ok(steps.some((x) => /^Every day: restart the extractor programs; collect [\d,]+ Toxic Metals from the launchpad\.$/.test(x)), steps.join(" | "));
+  assert.ok(steps.some((x) => /can't use all the Heavy Metals \([\d,]+\/day spare\).*fills it in about \d+ days/.test(x)), steps.join(" | "));
+  assert.equal(r.json.template, undefined);
+});
+
+withSde("pi_colony_calc template turns a designed layout into an importable template", async () => {
+  const args = {
+    extractors: [{ resource: "Heavy Metals", heads: 8, p0_per_hour: 25_000 }],
+    factories: [{ product: "Toxic Metals", count: 4 }],
+    template: true,
+  };
+  const r = await callTool(calcCtx(), "pi_colony_calc", { ...args, planet_type: "Lava" });
+  assert.equal(r.isError, false, r.text);
+  assert.equal(r.json.template.name, "Lava - Heavy Metals + Toxic Metals");
+  assert.equal(r.json.template.structures, 6);
+  const t = JSON.parse(r.texts[0]);
+  checkTemplate(t);
+  assert.equal(sde!.typeName(t.Pln), "Planet (Lava)");
+  const none = await callTool(calcCtx(), "pi_colony_calc", args);
+  assert.equal(none.isError, true);
+  assert.match(none.text, /needs the planet type/);
 });
 
 withSde("pi_colony_calc lowers scan-based output for longer programs", async () => {
@@ -117,7 +144,6 @@ withSde("pi_colony_calc checks a real colony from ESI with real link lengths", a
   const systemId = sde!.systemIdByName("J105443")!;
   const planet = sde!.planetsInSystem(systemId).find((p) => p.name.endsWith(" II"))!; // Lava
   const now = Date.now();
-  const g = (group: number) => sde!.typeIdsInGroups([group])[0];
   const pi = piData(sde!);
   const ctx = calcCtx({
     [`/characters/${MAIN.id}/planets`]: [{ planet_id: planet.id, planet_type: "lava", solar_system_id: systemId, upgrade_level: 4, num_pins: 4, last_update: new Date(now).toISOString() }],
@@ -125,13 +151,13 @@ withSde("pi_colony_calc checks a real colony from ESI with real link lengths", a
       routes: [],
       links: [{ source_pin_id: 1, destination_pin_id: 2, link_level: 0 }, { source_pin_id: 1, destination_pin_id: 3, link_level: 0 }],
       pins: [
-        { pin_id: 1, type_id: g(1030), latitude: 1.0, longitude: 1.0 },
+        { pin_id: 1, type_id: id("Lava Launchpad"), latitude: 1.0, longitude: 1.0 },
         {
-          pin_id: 2, type_id: g(1063), latitude: 1.01, longitude: 1.0,
+          pin_id: 2, type_id: id("Lava Extractor Control Unit"), latitude: 1.01, longitude: 1.0,
           install_time: new Date(now - 6 * 3600_000).toISOString(), expiry_time: new Date(now + 18 * 3600_000).toISOString(),
           extractor_details: { cycle_time: 900, head_radius: 0.01, product_type_id: id("Heavy Metals"), qty_per_cycle: 2_000, heads: [{ head_id: 0, latitude: 0, longitude: 0 }] },
         },
-        { pin_id: 3, type_id: g(1028), latitude: 1.0, longitude: 1.01, schematic_id: pi.schematic.get(id("Toxic Metals"))!.id },
+        { pin_id: 3, type_id: id("Lava Basic Industry Facility"), latitude: 1.0, longitude: 1.01, schematic_id: pi.schematic.get(id("Toxic Metals"))!.id },
       ],
     },
   }, [MAIN]);
@@ -141,9 +167,21 @@ withSde("pi_colony_calc checks a real colony from ESI with real link lengths", a
   assert.equal(r.json.planet_type, "Lava");
   assert.equal(r.json.command_center_level, 4);
   const km = Number(/(\d[\d,]*) km/.exec(r.json.links)![1].replace(/,/g, ""));
-  assert.ok(km > 0, r.json.links);
+  // Latitude is measured from the pole: 0.01 rad apart along a meridian and 0.01 rad of longitude at 1.0 from the pole.
+  const radiusKm = sde!.planetRadius(planet.id)! / 1000;
+  const expected = radiusKm * 0.01 + radiusKm * 0.01 * Math.sin(1.0);
+  assert.ok(Math.abs(km - expected) <= 1, `${km} km, expected ~${Math.round(expected)}`);
   assert.match(r.json.links, /^2 links/);
   assert.ok(r.json.structures.some((s: string) => /^Extractor 1: Heavy Metals, 1 heads, [\d,]+\/h$/.test(s)), r.json.structures.join("\n"));
+
+  // A copy of the real colony as a template.
+  const copy = await callTool(ctx, "pi_colony_calc", { from_colony: { planet: planet.name }, template: true });
+  assert.equal(copy.isError, false, copy.text);
+  assert.equal(copy.json.template.name, `Copy of ${planet.name} (Calc Owner)`);
+  const t = JSON.parse(copy.texts[0]);
+  checkTemplate(t);
+  assert.deepEqual(t.P.map((p: any) => p.La), [1.0, 1.01, 1.0], "positions as in the colony");
+  assert.equal(t.L.length, 2);
 
   const none = await callTool(ctx, "pi_colony_calc", { from_colony: { planet: "Jita IV" } });
   assert.equal(none.isError, true);

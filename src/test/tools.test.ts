@@ -18,8 +18,8 @@ const UNTESTED = new Set([
   "wormhole_type",
 ]);
 
-/** Tools that change the account or game client. Their descriptions must tell the model to confirm first. */
-const GAME_WRITES = ["fitting_save", "fitting_delete", "mail_send", "ui_action", "route_plan", "esi_request"];
+/** Tools that change the account, the game client or the user's files. Their descriptions must tell the model to confirm first. */
+const GAME_WRITES = ["fitting_save", "fitting_delete", "mail_send", "ui_action", "route_plan", "esi_request", "pi_plan_export"];
 
 async function listTools() {
   const conn = await connect(testCtx({ sde: null }));

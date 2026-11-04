@@ -496,6 +496,60 @@ routed share of that source's output; a factory fed from storage or a launchpad 
 from an extractor or factory that no route carries away is flagged. Checked live on 7 real colonies (all routed via
 storage): no false alarms.
 
+### 5.2e Setup sheets (`src/pi-setup.ts`)
+
+`pi_optimize` with `setup_guide` (and `pi_colony_calc` for a layout that fits) turns each colony's layout into a build
+sheet. The layout is a hub: every structure links to the launchpad, extractors deliver to it, and factories take their
+inputs from it and return their output to it. Each sheet lists:
+
+- what to place;
+- each extractor's resource, heads, program and rate;
+- each factory group's schematic and per-cycle input routes, with how busy it will be;
+- what to bring in and collect each visit (factory inputs name the colonies that make them, or "bought");
+- when spare P0 will fill the launchpad.
+
+`haul_per_trip` totals the market buys and the sales for one restock interval.
+
+### 5.2f Colony templates and saved plans (`src/pi-template.ts`, `src/pi-plan.ts`)
+
+The client saves and imports colony templates (Planetary Industry view > Save as template / Open template > Import &
+Export, from the clipboard or `.json` files in `Documents\EVE\PlanetaryInteractionTemplates`). CCP doesn't document the
+format; it was read from client-saved templates (github.com/MattFalahe/EVE-PI-Templates) and checked against a real
+colony from ESI, whose pins and routes map onto it one to one:
+
+| Field | Meaning |
+|---|---|
+| `CmdCtrLv` | command center level |
+| `Cmt` | template name |
+| `Pln` | planet type id |
+| `Diam` | diameter of the planet it was made for, km |
+| `P` | structures (the command center is not one): `T` type, `La`/`Lo` position in radians, `S` product (factory) or P0 (extractor), `H` extractor heads |
+| `L` | links: `S`/`D` 1-based indexes into `P`, `Lv` link level |
+| `R` | routes: `P` path as 1-based indexes into `P` (source, waypoints, destination), `Q` quantity per cycle, `T` commodity |
+
+Positions use ESI's convention: `La` is measured from the pole (0 to pi), so distances use the sine of it (the link
+length in `pi_colony_calc` used the cosine before, which undercounted east-west links). Client-saved templates mix
+structure types from other planet types, so the client evidently maps them on import; generated templates use the
+target planet's own types. Head positions and programs aren't in templates.
+
+Generated templates use the build sheets' hub: the launchpad in the middle, structures on a hex lattice 0.0122 rad
+apart (what client-saved templates use), each linked to a neighbour one ring in (a factory or the launchpad where
+possible), factories closest, extractors and storage outside. Every route runs through the launchpad. With the
+planet's real size the link lengths are checked against the command center.
+
+`pi_optimize save_as` freezes the chosen colonies, layouts included, in `<data dir>/pi-plans`. `pi_plans` and
+`pi_plan_export` derive everything from the saved plan and static data only, so the sheets and templates are the same
+on every call until the player replans.
+
+The routine for every undock (`pi_plans`, and the build book's "Every undock" section) turns the saved plan into one
+ordered run per character: extraction-only characters first, so the factories' inputs are in the shared hangar before
+the factory characters fly; planets in orbit order; on each, restart the programs, launch and collect a visit's output,
+and where each part goes (which factory colony, or the stockpile); then dock and drop it in the shared hangar. Factory
+colonies are restocked every `restock_days` with the exact amount from each supplying colony. Each factory is filled
+from its own character's colonies first (nothing to pass through the hangar), then from the colonies with the most to
+spare, so inputs come from few places; ties go by orbit and name, so the split never changes. Cargo per run is given
+for normal and factory days. It assumes the characters share a hangar (a corp hangar in the structure).
+
 ### 5.3 Layout templates the optimiser picks from
 
 | Template | Structures (typical, CC level 4–5) | Use when |
