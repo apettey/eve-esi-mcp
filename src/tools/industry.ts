@@ -1,7 +1,7 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Ctx } from "../context.js";
-import { duration, isk, mapLimit, norm } from "../util.js";
+import { duration, isk, norm } from "../util.js";
 import { READ_ONLY, characterParam, handler, reply, section } from "./helpers.js";
 
 const ACTIVITIES: Record<number, string> = {
@@ -90,83 +90,6 @@ export function registerIndustryTools(server: McpServer, ctx: Ctx) {
       }
       if (Object.keys(errors).length) out.unavailable = errors;
       return reply(out);
-    }),
-  );
-
-  server.registerTool(
-    "planets",
-    {
-      title: "Planetary industry colonies",
-      description:
-        "A character's PI colonies with planet names and types, extractor products and expiry times (soonest first), factory " +
-        "schematics, and storage contents. ESI only updates PI data when the colony is viewed in game.",
-      inputSchema: {
-        character: characterParam,
-        include_storage: z.boolean().optional().describe("Include storage/launchpad contents (default true)."),
-      },
-      annotations: READ_ONLY,
-    },
-    handler(async ({ character, include_storage }) => {
-      const c = ctx.character(character);
-      const sde = await ctx.sde();
-      const scope = "esi-planets.manage_planets.v1";
-      const colonies = await ctx.esi.get<any[]>(`/characters/${c.id}/planets`, { character: c, scope });
-      const now = Date.now();
-      const details = await mapLimit(colonies, 6, async (p) => {
-        const d = await ctx.esi.get<any>(`/characters/${c.id}/planets/${p.planet_id}`, { character: c }).catch(() => null);
-        const pins = d?.pins ?? [];
-        const extractors = pins.filter((x: any) => x.extractor_details).map((x: any) => {
-          const exp = x.expiry_time ? Date.parse(x.expiry_time) : null;
-          return {
-            product: x.extractor_details.product_type_id ? sde.typeName(x.extractor_details.product_type_id) : "not configured",
-            expires: x.expiry_time,
-            status: exp == null ? "idle" : exp <= now ? "EXPIRED" : `${duration(exp - now)} left`,
-            heads: x.extractor_details.heads?.length,
-            cycle_minutes: x.extractor_details.cycle_time ? Math.round(x.extractor_details.cycle_time / 60) : undefined,
-            _exp: exp ?? 0,
-          };
-        });
-        const factories = new Map<string, number>();
-        const storage = new Map<number, number>();
-        for (const pin of pins) {
-          if (pin.schematic_id || pin.factory_details) {
-            const sid = pin.schematic_id ?? pin.factory_details?.schematic_id;
-            const key = sid ? `schematic ${sid}` : sde.typeName(pin.type_id);
-            factories.set(key, (factories.get(key) ?? 0) + 1);
-          }
-          for (const ct of pin.contents ?? []) storage.set(ct.type_id, (storage.get(ct.type_id) ?? 0) + ct.amount);
-        }
-        // Schematic names come from the output product of the factory's schematic.
-        const schematicNames = await Promise.all(
-          [...factories.keys()].map(async (k) => {
-            const sid = Number(k.replace("schematic ", ""));
-            if (!sid) return [k, factories.get(k)!] as const;
-            const s = await ctx.esi.get<any>(`/universe/schematics/${sid}`).catch(() => null);
-            return [s?.schematic_name ?? k, factories.get(k)!] as const;
-          }),
-        );
-        const soonest = extractors.filter((e: any) => e._exp).sort((a: any, b: any) => a._exp - b._exp)[0];
-        return {
-          planet: sde.planetName(p.planet_id) ?? `Planet ${p.planet_id}`,
-          type: p.planet_type,
-          system: sde.systemSummary(p.solar_system_id)?.name,
-          security: sde.systemSummary(p.solar_system_id)?.security,
-          command_center_level: p.upgrade_level,
-          pins: p.num_pins,
-          last_update: p.last_update,
-          extractors: extractors.map(({ _exp, ...e }: any) => e),
-          factories: schematicNames.map(([n, count]) => `${n} x${count}`),
-          storage: include_storage === false ? undefined : [...storage.entries()].map(([id, n]) => `${sde.typeName(id)} x${n}`),
-          _soonest: soonest?._exp ?? Infinity,
-        };
-      });
-      details.sort((a, b) => a._soonest - b._soonest);
-      return reply({
-        character: c.name,
-        colonies: details.length,
-        expired_extractors: details.flatMap((d) => d.extractors.filter((e: any) => e.status === "EXPIRED").map(() => d.planet)),
-        planets: details.map(({ _soonest, ...d }) => d),
-      });
     }),
   );
 }

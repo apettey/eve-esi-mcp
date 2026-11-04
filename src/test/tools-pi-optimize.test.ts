@@ -20,7 +20,7 @@ function prices(over: Record<string, number> = {}): Map<number, Price> {
 
 const PARAMS: OptimizeParams = {
   yieldAtFull: 8000, taxRate: 0, sellFee: 0.05, liquidityShare: 0.1, maxCharactersPerPlanet: 3, factories: true,
-  maxCapitalPerDay: 100_000_000, maxHaulPerDay: 15_000, restockDays: 2,
+  maxCapitalPerDay: 100_000_000, maxHaulPerDay: 15_000, restockDays: 2, exportRawP0: false,
 };
 
 function planet(name: string, type: string, readings: Record<string, number>, pid = 1): PlanetInput {
@@ -80,7 +80,7 @@ withSde("optimize respects characters per planet and explains unused slots", () 
 // ---------------------------------------------------------------------------------------------------------------
 // The tool
 
-function piCtx() {
+function piCtx(extra: Record<string, unknown> = {}) {
   const pi = piData(sde!);
   const systemId = sde!.systemIdByName("J105443")!;
   const MAIN = character(90200001, "Planner Main");
@@ -106,9 +106,34 @@ function piCtx() {
       ],
       "/markets/10000002/history": () =>
         Array.from({ length: 7 }, (_, i) => ({ date: `2026-11-0${i + 1}`, average: 1, volume: 1_000_000, order_count: 1, highest: 1, lowest: 1 })),
+      ...extra,
     },
   });
 }
+
+withSde("pi_optimize calibrates yield from a real extractor on a planet with readings", async () => {
+  const systemId = sde!.systemIdByName("J105443")!;
+  const vii = sde!.planetsInSystem(systemId).find((p) => p.name.endsWith(" VII"))!;
+  const now = Date.now();
+  const ecu = sde!.typeIdsInGroups([1063])[0];
+  const ctx = piCtx({
+    "/characters/90200001/planets": [
+      { planet_id: vii.id, planet_type: "ice", solar_system_id: systemId, upgrade_level: 5, num_pins: 3, last_update: new Date(now).toISOString() },
+    ],
+    [`/characters/90200001/planets/${vii.id}`]: {
+      links: [], routes: [],
+      pins: [{
+        pin_id: 1, type_id: ecu, latitude: 0, longitude: 0,
+        install_time: new Date(now - 12 * 3600_000).toISOString(), expiry_time: new Date(now + 12 * 3600_000).toISOString(),
+        extractor_details: { cycle_time: 900, head_radius: 0.01, product_type_id: id("Heavy Metals"), qty_per_cycle: 10_000, heads: Array.from({ length: 10 }, (_, i) => ({ head_id: i, latitude: 0, longitude: 0 })) },
+      }],
+    },
+  });
+  const r = await callTool(ctx, "pi_optimize", { abundance: { VII: { "Heavy Metals": 100 } }, max_input_isk_per_day: 0 });
+  assert.equal(r.isError, false, r.text);
+  assert.match(r.json.assumptions.p0_per_hour_at_100, /calibrated: median of 1 extractor/);
+  assert.doesNotMatch(r.json.assumptions.p0_per_hour_at_100, /^30,000/);
+});
 
 withSde("pi_optimize plans every character's slots with readings, totals and assumptions", async () => {
   const r = await callTool(piCtx(), "pi_optimize", {
@@ -117,7 +142,7 @@ withSde("pi_optimize plans every character's slots with readings, totals and ass
   });
   assert.equal(r.isError, false, r.text);
   assert.equal(r.json.system.name, "J105443");
-  assert.equal(r.json.assumptions.p0_per_hour_at_100, 8000);
+  assert.match(r.json.assumptions.p0_per_hour_at_100, /^30,000 \(default/);
   assert.equal(r.json.plan.length, 2, r.text);
   assert.equal(r.json.totals.input_purchases_per_day, "0.00 ISK");
   assert.ok(r.json.plan.every((p: any) => p.colonies.length === 3), "Interplanetary Consolidation 2 = 3 colonies each");
