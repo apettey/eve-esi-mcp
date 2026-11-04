@@ -1,7 +1,10 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Ctx } from "../context.js";
-import { piData, tierName } from "../pi.js";
+import type { StoredCharacter } from "../auth/store.js";
+import type { Sde } from "../sde/db.js";
+import { piData, tierName, type PiData } from "../pi.js";
+import { analyzeColony, yieldAt100 } from "../pi-colony.js";
 import { optimize, pinCosts, type PlanetInput, type Price, type Slot } from "../pi-optimize.js";
 import { marketSummary, resolveMarketScope } from "../market.js";
 import { UserError, isk, mapLimit } from "../util.js";
@@ -14,6 +17,42 @@ function planetRef(planets: Array<{ id: number; name: string; celestial_index: n
   const hit = planets.find((p) => p.name.toUpperCase() === r || p.name.split(" ").pop() === r || String(p.celestial_index) === r);
   if (!hit) throw new UserError(`No planet "${ref}" in this system. Planets: ${planets.map((p) => p.name.split(" ").pop()).join(", ")}.`);
   return hit;
+}
+
+/** Default P0/hour for a 10-head extractor at a reading of 100, on roughly one-day programs, before calibration. */
+export const DEFAULT_YIELD_AT_100 = 30_000;
+
+/**
+ * Real extractor output from the characters' colonies. Extractors in `systemId` on planets with scan readings give an
+ * exact calibration (median of yieldAt100). Extractors elsewhere only give a range per 10 heads, since their readings
+ * are unknown.
+ */
+async function calibrate(ctx: Ctx, sde: Sde, pi: PiData, chars: StoredCharacter[], systemId: number, planets: PlanetInput[], read: Set<number>) {
+  const exact: number[] = [];
+  const elsewhere: number[] = [];
+  const now = Date.now();
+  await mapLimit(chars, 3, async (c) => {
+    if (!c.scopes.includes("esi-planets.manage_planets.v1")) return;
+    const colonies = await ctx.esi.get<any[]>(`/characters/${c.id}/planets`, { character: c, scope: "esi-planets.manage_planets.v1" }).catch(() => []);
+    await mapLimit(colonies, 4, async (col) => {
+      const layout = await ctx.esi.get<any>(`/characters/${c.id}/planets/${col.planet_id}`, { character: c }).catch(() => null);
+      if (!layout) return;
+      const planet = planets.find((p) => p.id === col.planet_id);
+      for (const ex of analyzeColony(sde, pi, layout, now).extractors) {
+        if (!ex.program || !ex.heads) continue;
+        if (col.solar_system_id === systemId && planet && read.has(planet.id)) {
+          const y = yieldAt100(ex, planet.abundance.get(ex.product) ?? 0);
+          if (y) exact.push(y);
+        } else elsewhere.push(ex.program.avgPerHour * (10 / ex.heads));
+      }
+    });
+  });
+  exact.sort((x, y) => x - y);
+  return {
+    value: exact.length ? exact[Math.floor(exact.length / 2)] : undefined,
+    count: exact.length,
+    elsewhere: elsewhere.length ? { min: Math.min(...elsewhere), max: Math.max(...elsewhere), count: elsewhere.length } : undefined,
+  };
 }
 
 export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
@@ -44,7 +83,8 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
         tax_rate_pct: z.number().min(0).max(100).optional().describe("Customs office tax rate (default 0, e.g. your corp's POCOs)."),
         sell_fee_pct: z.number().min(0).max(30).optional().describe("Sales tax + broker fee when selling (default 5)."),
         p0_per_hour_at_100: z.number().min(100).max(100000).optional()
-          .describe("Assumed P0/hour from one 10-head extractor on a resource scanning 100 (default 8000). Calibrate from real extractors."),
+          .describe("P0/hour from one 10-head extractor on a resource scanning 100. Default: calibrated from your extractors in this " +
+            "system on planets you gave readings for, else 30,000 (roughly one-day programs)."),
         market_share_pct: z.number().min(1).max(100).optional()
           .describe("Max share of an item's daily market volume the plan may trade (default 10)."),
         max_characters_per_planet: z.number().int().min(1).max(20).optional()
@@ -54,6 +94,8 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
           .describe("ISK per day you're willing to spend on factory inputs (default 100,000,000). 0 = extraction only."),
         max_haul_m3_per_day: z.number().min(0).optional()
           .describe("m³ per day you can haul in and out of the system combined (default 15,000, about one 100k m³ trip a week)."),
+        export_raw_p0: z.boolean().optional()
+          .describe("Haul and sell raw P0 the basic factories can't process (default false: it is left on the planet)."),
         restock_days: z.number().min(0.25).max(30).optional()
           .describe("Days between visits to restock a factory colony (default 2). Inputs for that long must fit its launchpad and storage."),
       },
@@ -112,10 +154,19 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
         );
       }
 
-      // Prices and daily volume for every P1-P4 commodity.
+      // Yield per scan point: given, or calibrated from real extractors, or the default.
+      const cal = a.p0_per_hour_at_100 == null ? await calibrate(ctx, sde, pi, chars, systemId, planets, read) : undefined;
+      const yieldAtFull = a.p0_per_hour_at_100 ?? cal?.value ?? DEFAULT_YIELD_AT_100;
+      const yieldNote = a.p0_per_hour_at_100 != null
+        ? "given"
+        : cal?.value
+          ? `calibrated: median of ${cal.count} extractor(s) in this system against your scan readings`
+          : "default (no extractors in this system on planets with readings yet)";
+
+      // Prices and daily volume for every PI commodity (raw P0 included: surplus P0 can be exported).
       const scope = await resolveMarketScope(ctx, a.market);
       const prices = new Map<number, Price>();
-      const ids = [...pi.tier].filter(([, t]) => t >= 1).map(([id]) => id);
+      const ids = [...pi.tier.keys()];
       await mapLimit(ids, 8, async (id) => {
         const m: any = await marketSummary(ctx, scope, id, { history: true }).catch(() => null);
         if (m?.sell_min) prices.set(id, { sell: m.sell_min, dailyVolume: m.region_history?.avg_daily_volume_7d || undefined });
@@ -123,7 +174,7 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
       if (!prices.size) throw new UserError(`No PI commodity prices found at ${scope.label}.`);
 
       const params = {
-        yieldAtFull: a.p0_per_hour_at_100 ?? 8000,
+        yieldAtFull,
         taxRate: (a.tax_rate_pct ?? 0) / 100,
         sellFee: (a.sell_fee_pct ?? 5) / 100,
         liquidityShare: (a.market_share_pct ?? 10) / 100,
@@ -132,6 +183,7 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
         maxCapitalPerDay: a.max_input_isk_per_day ?? 100_000_000,
         maxHaulPerDay: a.max_haul_m3_per_day ?? 15_000,
         restockDays: a.restock_days ?? 2,
+        exportRawP0: a.export_raw_p0 ?? false,
       };
       const plan = optimize(sde, pi, pinCosts(sde), prices, planets, slots, params);
 
@@ -142,9 +194,17 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
       if (unread.length) warnings.unshift(`No scan readings for ${unread.join(", ")}: assumed ${def} for every resource there.`);
       if (all.some((x) => x.kind === "extraction")) {
         warnings.push(
-          "Extraction yields are estimates from scan readings. After the first cycles, compare with real output from the planets tool " +
-          "and rerun with p0_per_hour_at_100 adjusted.",
+          cal?.value
+            ? "Extraction yields are calibrated from your extractors here; longer programs than theirs yield less per hour."
+            : "Extraction yields are estimates from scan readings. Once extractors run here, rerun with the same readings and " +
+              "the tool calibrates itself from them.",
         );
+        if (cal?.elsewhere && !cal.value) {
+          warnings.push(
+            `For reference, your ${cal.elsewhere.count} extractor(s) in other systems averaged ${Math.round(cal.elsewhere.min).toLocaleString("en-US")}-` +
+            `${Math.round(cal.elsewhere.max).toLocaleString("en-US")} P0/h per 10 heads over their programs (their scan readings are unknown).`,
+          );
+        }
       }
       if (all.some((x) => x.kind === "extraction")) {
         warnings.push(
@@ -157,7 +217,7 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
         system: sde.systemSummary(systemId),
         market: scope.label,
         assumptions: {
-          p0_per_hour_at_100: params.yieldAtFull,
+          p0_per_hour_at_100: `${Math.round(params.yieldAtFull).toLocaleString("en-US")} (${yieldNote})`,
           customs_tax: `${a.tax_rate_pct ?? 0}%`,
           sell_fees: `${a.sell_fee_pct ?? 5}%`,
           prices: "lowest sell order, for outputs and for bought inputs",

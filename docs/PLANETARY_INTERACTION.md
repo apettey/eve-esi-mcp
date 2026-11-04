@@ -94,7 +94,7 @@ ESI gives `qty_per_cycle` (the base value), `cycle_time`, `head_radius`, `heads`
 `expiry_time`. Output decays over the program:
 
 ```
-cycle_time   = 15 min × 2^(max(0, floor(log2(program_hours / 25))) + 1)   # 30 min ≤ ~25 h, 1 h ~50 h, 2 h ~100 h, 4 h ≥ ~200 h
+cycle_time   = from ESI (extractor_details.cycle_time)   # observed live: 15 min on one-day programs (EVE Uni's "30 min" is wrong for these)
 bar_width    = cycle_time / 900 s
 t            = (cycle_index + 0.5) × bar_width
 decay        = base / (1 + t × 0.012)
@@ -444,6 +444,19 @@ needed. Keep it deterministic and explain the pick: "Storm planet, Suspended Pla
   characters per planet are capped, and the same resource pair isn't extracted twice on one planet. A final pass
   re-splits factory inputs lowest tier first, so local output feeds factories before anything is bought.
 
+### 5.2b Real yields (live data, Nov 2026)
+
+Real colonies read live (wormhole space, 8 heads, one-day programs, 15-minute cycles) had `qty_per_cycle`
+of 7,900-17,000, i.e. **23,600-53,000 P0/h per extractor** averaged over the program (29k-66k per 10 heads). That is
+far more than two extractors' worth of basic factories can process at CC level 5, so the binding limit on an
+extraction colony is CPU/PG for basic factories, not extraction. Those colonies ran 2 extractors into 4 basic
+factories and piled up 0.5-1.3M unprocessed P0 in storage. `pi_optimize` therefore:
+
+- defaults to 30,000 P0/h per 10 heads at a reading of 100, and calibrates itself (median) from the characters' own
+  extractors in the target system on planets with scan readings;
+- tries every head count with as many basic factories as still fit, and leaves surplus P0 unprocessed unless
+  `export_raw_p0` is set.
+
 ### 5.3 Layout templates the optimiser picks from
 
 | Template | Structures (typical, CC level 4–5) | Use when |
@@ -467,7 +480,7 @@ Single-planet chains (all P0 on one planet type, from §3). These matter because
 
 - Refine to at least P1 before export: about 4× less volume and a lower tax base.
 - Route extractor output into storage or the launchpad, not straight into a factory, so overflow isn't lost.
-- Match the program length to the login cadence. Daily: 1 day (30-min cycles). Every 3–4 days: 3–4 days. Shorter
+- Match the program length to the login cadence. Daily: 1 day (15-min cycles). Every 3–4 days: 3–4 days. Shorter
   programs give more P0/h.
 - Re-place heads when `qty_per_cycle` drops versus the last program (depletion). Spread heads to limit overlap.
 - Highsec: train Customs Code Expertise (halves the NPC part at V) and prefer player POCOs with low tax. Null/WH:

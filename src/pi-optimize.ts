@@ -96,6 +96,8 @@ export interface OptimizeParams {
   maxHaulPerDay: number;
   /** Days between visits to a factory colony: its inputs for that long must fit its launchpad and storage. */
   restockDays: number;
+  /** Haul and sell raw P0 the basic factories can't process (otherwise it piles up unused). */
+  exportRawP0: boolean;
 }
 
 /** Launchpad and storage facility capacity in m3 (game client values; not in the SDE). */
@@ -158,8 +160,10 @@ const saleValue = (c: Ctx, type: number, perHour: number) => {
 };
 
 /**
- * Best extraction colony on a planet for two extractors on resources r1 and r2 (may be the same resource): the head
- * count that fits the command center, then either sell both P1 or combine them into a P2, whichever pays more.
+ * Best extraction colony on a planet for two extractors on resources r1 and r2 (may be the same resource). Strong
+ * deposits give more P0 than a command center can power basic factories for, so every head count is tried with as
+ * many basic factories as still fit. Unprocessed P0 is exported raw (or left to pile up when it has no market). Output
+ * is sold as P1 or combined into P2, whichever pays more.
  */
 export function extractionColony(c: Ctx, planet: PlanetInput, r1: number, r2: number, ccLevel: number): Colony | null {
   const cc = CC_LEVELS[Math.min(ccLevel, 5)];
@@ -168,42 +172,65 @@ export function extractionColony(c: Ctx, planet: PlanetInput, r1: number, r2: nu
   const p1b = p1From(pi, r2);
   if (!p1a || !p1b) return null;
   const p2 = r1 === r2 ? undefined : p2From(pi, p1a, p1b);
+  const ab = (r: number) => planet.abundance.get(r) ?? 0;
   let best: Colony | null = null;
+  let bestHeads = Infinity;
   for (const makeP2 of p2 ? [true, false] : [false]) {
     for (let heads = MAX_HEADS; heads >= 1; heads--) {
-      const y = (r: number) => params.yieldAtFull * ((planet.abundance.get(r) ?? 0) / 100) * (heads / MAX_HEADS);
+      const y = (r: number) => params.yieldAtFull * (ab(r) / 100) * (heads / MAX_HEADS);
       const p0 = new Map<number, number>();
       p0.set(r1, (p0.get(r1) ?? 0) + y(r1));
       p0.set(r2, (p0.get(r2) ?? 0) + y(r2));
-      const basicCount = [...p0.values()].reduce((n, rate) => n + Math.max(1, Math.ceil(rate / 6000)), 0);
-      const p1Rate = new Map([...p0].map(([r, rate]) => [p1From(pi, r)!, Math.min(rate, Math.ceil(rate / 6000) * 6000) / 150]));
-      let adv = 0;
-      const outputs: Flow[] = [];
-      if (makeP2 && p2) {
-        const pairs = Math.min(p1Rate.get(p1a)!, p1Rate.get(p1b)!) / 40;
-        adv = Math.max(1, Math.ceil(pairs - 1e-9));
-        const p2Rate = Math.min(pairs, adv) * 5;
-        outputs.push({ type: p2, perHour: p2Rate });
-        for (const [t, r] of p1Rate) {
-          const left = r - (p2Rate / 5) * 40;
-          if (left > 0.01) outputs.push({ type: t, perHour: left });
+      const fixed = add([costs.launchpad, 1], [costs.ecu, 2], [costs.head, 2 * (heads - 1)]);
+      for (let adv = makeP2 ? 1 : 0; adv <= (makeP2 ? 4 : 0); adv++) {
+        const base = add([fixed, 1], [costs.advanced, adv]);
+        if (!fits(base, cc)) break;
+        // Basic factories: as many as fit, shared between the resources, never more than each one can feed.
+        const want = [...p0].map(([r, rate]) => ({ r, rate, need: Math.max(1, Math.ceil(rate / 6000 - 1e-9)) }));
+        let budget = 0;
+        while (fits(add([base, 1], [costs.basic, budget + 1]), cc) && budget < want.reduce((n, w) => n + w.need, 0)) budget++;
+        if (budget < want.length) continue;
+        const alloc = new Map(want.map((w) => [w.r, 1]));
+        for (let left = budget - want.length; left > 0; left--) {
+          // Give the next basic to the resource with the most unprocessed P0.
+          const next = want.filter((w) => alloc.get(w.r)! < w.need)
+            .sort((a, b) => (b.rate - alloc.get(b.r)! * 6000) - (a.rate - alloc.get(a.r)! * 6000))[0];
+          if (!next) break;
+          alloc.set(next.r, alloc.get(next.r)! + 1);
         }
-      } else for (const [t, r] of p1Rate) outputs.push({ type: t, perHour: r });
-      const cost = add([costs.launchpad, 1], [costs.ecu, 2], [costs.head, 2 * (heads - 1)], [costs.basic, basicCount], [costs.advanced, adv]);
-      if (!fits(cost, cc)) continue;
-      const values = outputs.map((o) => saleValue(c, o.type, o.perHour));
-      if (values.some((v) => v == null)) break;
-      const isk = values.reduce((a, v) => a! + v!, 0)!;
-      const ab = (r: number) => planet.abundance.get(r) ?? 0;
-      const res = r1 === r2 ? `2 x ${c.sde.typeName(r1)} (${ab(r1)})` : `${c.sde.typeName(r1)} (${ab(r1)}) + ${c.sde.typeName(r2)} (${ab(r2)})`;
-      const out = outputs.map((o) => `${c.sde.typeName(o.type)} ${Math.round(o.perHour * 24).toLocaleString("en-US")}/day (${tierName(pi.tier.get(o.type))})`).join(", ");
-      const colony: Colony = {
-        kind: "extraction", planet, ccLevel, iskPerHour: isk, capitalPerHour: 0, outputs, inputs: [],
-        key: [r1, r2].sort().join("+"),
-        describe: `extract ${res}, ${heads} heads per extractor, ${basicCount} basic${adv ? ` + ${adv} advanced` : ""} -> ${out}`,
-      };
-      if (!best || colony.iskPerHour > best.iskPerHour) best = colony;
-      break; // the most heads that fit is the best for this mode
+        const p1Rate = new Map<number, number>();
+        const rawLeft: Flow[] = [];
+        for (const w of want) {
+          const processed = Math.min(w.rate, alloc.get(w.r)! * 6000);
+          p1Rate.set(p1From(pi, w.r)!, processed / 150);
+          if (w.rate - processed > 1) rawLeft.push({ type: w.r, perHour: w.rate - processed });
+        }
+        const outputs: Flow[] = [];
+        if (makeP2 && p2) {
+          const pairs = Math.min(p1Rate.get(p1a)!, p1Rate.get(p1b)!, adv * 40) / 40;
+          outputs.push({ type: p2, perHour: pairs * 5 });
+          for (const [t, r] of p1Rate) if (r - pairs * 40 > 0.01) outputs.push({ type: t, perHour: r - pairs * 40 });
+        } else for (const [t, r] of p1Rate) outputs.push({ type: t, perHour: r });
+        // Raw P0 is only hauled when asked for and when it has a market.
+        if (params.exportRawP0) for (const f of rawLeft) if (c.prices.get(f.type)?.sell) outputs.push(f);
+        const values = outputs.map((o) => saleValue(c, o.type, o.perHour));
+        if (values.some((v) => v == null)) continue;
+        const isk = values.reduce((a, v) => a! + v!, 0)!;
+        const res = r1 === r2 ? `2 x ${c.sde.typeName(r1)} (${ab(r1)})` : `${c.sde.typeName(r1)} (${ab(r1)}) + ${c.sde.typeName(r2)} (${ab(r2)})`;
+        const out = outputs.map((o) => `${c.sde.typeName(o.type)} ${Math.round(o.perHour * 24).toLocaleString("en-US")}/day (${tierName(pi.tier.get(o.type))})`).join(", ");
+        const idle = rawLeft.filter((f) => !params.exportRawP0 || !c.prices.get(f.type)?.sell);
+        const colony: Colony = {
+          kind: "extraction", planet, ccLevel, iskPerHour: isk, capitalPerHour: 0, outputs, inputs: [],
+          key: [r1, r2].sort().join("+"),
+          describe: `extract ${res}, ${heads} heads per extractor, ${budget} basic${adv ? ` + ${adv} advanced` : ""} -> ${out}` +
+            (idle.length ? ` (${idle.map((f) => `${c.sde.typeName(f.type)} ${Math.round(f.perHour * 24).toLocaleString("en-US")}/day`).join(", ")} unprocessed)` : ""),
+        };
+        // Prefer fewer heads when it barely matters: cheaper, and less P0 left unprocessed.
+        if (!best || colony.iskPerHour > best.iskPerHour * 1.005 || (colony.iskPerHour >= best.iskPerHour * 0.995 && heads < bestHeads)) {
+          best = colony;
+          bestHeads = heads;
+        }
+      }
     }
   }
   return best;

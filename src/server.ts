@@ -13,6 +13,7 @@ import { registerRawTools } from "./tools/raw.js";
 import { registerDoctrineTools } from "./tools/doctrine.js";
 import { registerPlanetaryTools } from "./tools/planetary.js";
 import { registerPiOptimizeTool } from "./tools/pi-optimize.js";
+import { registerPiColonyTools } from "./tools/pi-colonies.js";
 
 const INSTRUCTIONS = `EVE Online ESI server. Everything comes back with names resolved (items, systems, stations, structures,
 characters, corporations), so you rarely need to look ids up yourself.
@@ -32,7 +33,8 @@ Prefer the composite tools — they each replace many raw ESI calls:
   URLs, filters or battle reports, as bundles to pass unchanged to eve-fit's save_doctrine.
 - pi_system_planets / pi_product / pi_optimize / planets: planetary interaction. What a system's planets can make (all logged-in
   characters' colonies and free slots included), a commodity's full chain and planet needs, the best setup for every
-  alt from the player's scan readings (ask for them, or read a scan-window screenshot), and colony status.
+  alt from the player's scan readings (ask for them, or read a scan-window screenshot), and every character's colony
+  status with what needs attention first.
 - esi_request covers any remaining ESI route.
 Static data (items, attributes, systems) is served locally; the first call after install may take ~1 minute while
 the official SDE is downloaded and indexed.
@@ -53,6 +55,7 @@ export function buildServer(ctx: Ctx): McpServer {
   registerDoctrineTools(server, ctx);
   registerPlanetaryTools(server, ctx);
   registerPiOptimizeTool(server, ctx);
+  registerPiColonyTools(server, ctx);
   registerRawTools(server, ctx);
   return server;
 }
