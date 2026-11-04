@@ -527,6 +527,11 @@ export class Sde {
     return sys ? `${sys.name} ${romanNumeral(p.celestial_index)}` : null;
   }
 
+  /** Planet radius in metres (for PI link lengths). */
+  planetRadius(id: number): number | null {
+    return ((this.q("SELECT radius FROM planets WHERE id = ?").get(id) as any)?.radius) ?? null;
+  }
+
   planetSystem(id: number): number | null {
     return ((this.q("SELECT system_id FROM planets WHERE id = ?").get(id) as any)?.system_id) ?? null;
   }

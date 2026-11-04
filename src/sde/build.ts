@@ -13,7 +13,7 @@ import { log } from "../util.js";
  * Only the datasets the tools need are imported; localized strings keep English only.
  */
 
-export const SDE_SCHEMA_VERSION = 5;
+export const SDE_SCHEMA_VERSION = 6;
 
 const SCHEMA = `
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
@@ -46,7 +46,7 @@ CREATE TABLE systems (
 );
 CREATE INDEX systems_name ON systems (name COLLATE NOCASE);
 CREATE TABLE system_jumps (from_id INTEGER, to_id INTEGER, PRIMARY KEY (from_id, to_id)) WITHOUT ROWID;
-CREATE TABLE planets (id INTEGER PRIMARY KEY, system_id INTEGER, celestial_index INTEGER, type_id INTEGER);
+CREATE TABLE planets (id INTEGER PRIMARY KEY, system_id INTEGER, celestial_index INTEGER, type_id INTEGER, radius REAL);
 CREATE TABLE stations (id INTEGER PRIMARY KEY, name TEXT, system_id INTEGER, type_id INTEGER, owner_id INTEGER);
 CREATE INDEX stations_name ON stations (name COLLATE NOCASE);
 CREATE INDEX stations_system ON stations (system_id);
@@ -250,8 +250,8 @@ export async function buildSde(home: string, build: number, userAgent: string): 
     });
     const jumps = ins("INSERT OR IGNORE INTO system_jumps VALUES (?,?)");
     await eachLine(zip, entries, "mapStargates.jsonl", (r) => jumps.run(r.solarSystemID, r.destination.solarSystemID));
-    const pl = ins("INSERT INTO planets VALUES (?,?,?,?)");
-    await eachLine(zip, entries, "mapPlanets.jsonl", (r) => pl.run(r._key, r.solarSystemID, r.celestialIndex ?? null, r.typeID ?? null));
+    const pl = ins("INSERT INTO planets VALUES (?,?,?,?,?)");
+    await eachLine(zip, entries, "mapPlanets.jsonl", (r) => pl.run(r._key, r.solarSystemID, r.celestialIndex ?? null, r.typeID ?? null, r.radius ?? null));
 
     const fa = ins("INSERT INTO factions VALUES (?,?)");
     await eachLine(zip, entries, "factions.jsonl", (r) => fa.run(r._key, en(r.name)));

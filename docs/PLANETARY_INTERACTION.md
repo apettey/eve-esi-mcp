@@ -457,6 +457,22 @@ factories and piled up 0.5-1.3M unprocessed P0 in storage. `pi_optimize` therefo
 - tries every head count with as many basic factories as still fit, and leaves surplus P0 unprocessed unless
   `export_raw_p0` is set.
 
+### 5.2c Shared colony model (`src/pi-layout.ts`)
+
+`pi_colony_calc` and `pi_optimize` use one deterministic model, so the optimiser's numbers can be checked colony by
+colony:
+
+- **Cost:** SDE CPU/PG per structure, plus heads beyond the first. Links cost 15 tf + 0.2 tf/km and 10 MW + 0.15 MW/km.
+  Real colonies get real link lengths from pin latitude/longitude and the planet radius (SDE schema 6); otherwise 6% of
+  the command center is kept for links.
+- **Production:** an hour simulated tier by tier. Shared inputs are split in proportion to demand, and a factory runs at
+  its scarcest input's share. Leftover P1+ is exported and leftover P0 stays on the planet.
+- **Calculator suggestions:** the best single additions that still fit (by ISK/day). If the layout doesn't fit, the
+  cheapest removals that make it fit.
+- **Optimiser ranking:** greedy by ISK/day and greedy by ISK/day per share of the haul and input budgets; the better
+  total wins. Ranking by ISK alone let one bulky factory use up the haul budget that a dozen extraction colonies could
+  have used.
+
 ### 5.3 Layout templates the optimiser picks from
 
 | Template | Structures (typical, CC level 4–5) | Use when |
