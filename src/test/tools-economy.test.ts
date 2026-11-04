@@ -42,3 +42,29 @@ withSde("wallet summarises income by type and names parties, items and locations
   );
   assert.match(t.location, /^Jita IV - Moon 4/);
 });
+
+withSde("appraise names items with no sell orders instead of silently leaving them out of the sell total", async () => {
+  const thanatos = sde!.typeIdByName("Thanatos")!;
+  const dc = sde!.typeIdByName("Damage Control II")!;
+  const JITA_44 = 60003760;
+  const order = (type_id: number, is_buy_order: boolean, price: number) =>
+    ({ type_id, is_buy_order, price, volume_remain: 5, location_id: JITA_44 });
+  const ctx = testCtx({
+    esi: {
+      "/markets/prices": [{ type_id: thanatos, average_price: 2_000_000_000 }, { type_id: dc, average_price: 900_000 }],
+      "/markets/10000002/orders": (req: any) =>
+        [order(thanatos, true, 2_100_000_000), order(dc, false, 1_000_000), order(dc, true, 800_000)]
+          .filter((o) => o.type_id === req.query.type_id),
+    },
+  });
+  const r = await callTool(ctx, "appraise", { text: "Thanatos\t1\tCarrier\tShip\nDamage Control II x2" });
+  assert.equal(r.isError, false, r.text);
+  const t = r.json.totals;
+  assert.equal(t.sell, 2_000_000, "the sell total only sums items that have sell orders");
+  assert.deepEqual(t.no_sell_orders, ["Thanatos"]);
+  assert.equal(t.no_buy_orders, undefined);
+  assert.equal(t.sell_estimate_isk, "2.00b ISK", "the estimate fills gaps with the universe average");
+  assert.match(t.note, /Thanatos/);
+  assert.equal(t.buy_isk, "2.10b ISK");
+  assert.equal(r.json.items.find((i: any) => i.name === "Thanatos").sell_total, undefined);
+});

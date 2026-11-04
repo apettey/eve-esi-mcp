@@ -190,14 +190,22 @@ export async function appraise(ctx: Ctx, lines: ParsedLine[], scope: MarketScope
   const ids = [...merged.keys()];
   const summaries = await mapLimit(ids, 8, (id) => marketSummary(ctx, scope, id).catch(() => null));
   let sellTotal = 0, buyTotal = 0, volume = 0;
+  // Items with no orders on one side drop out of that side's total, so name them and estimate the gap.
+  let sellEstimate = 0, buyEstimate = 0;
+  const noSell: string[] = [], noBuy: string[] = [];
   const items = ids.map((id, i) => {
     const qty = merged.get(id)!;
     const s = summaries[i] as any;
     const t = sde.type(id)!;
     const sell = s?.sell_min ?? null;
     const buy = s?.buy_max ?? null;
+    const avg = prices.get(id)?.average ?? 0;
     sellTotal += (sell ?? 0) * qty;
     buyTotal += (buy ?? 0) * qty;
+    sellEstimate += (sell ?? avg) * qty;
+    buyEstimate += (buy ?? avg) * qty;
+    if (sell == null) noSell.push(t.name);
+    if (buy == null) noBuy.push(t.name);
     volume += (t.packaged_volume ?? t.volume ?? 0) * qty;
     return {
       name: t.name,
@@ -220,6 +228,17 @@ export async function appraise(ctx: Ctx, lines: ParsedLine[], scope: MarketScope
       buy_isk: isk(buyTotal),
       volume_m3: round(volume, 2),
       item_types: items.length,
+      ...(noSell.length ? { no_sell_orders: noSell, sell_estimate: round(sellEstimate, 2), sell_estimate_isk: isk(sellEstimate) } : {}),
+      ...(noBuy.length ? { no_buy_orders: noBuy, buy_estimate: round(buyEstimate, 2), buy_estimate_isk: isk(buyEstimate) } : {}),
+      ...(noSell.length || noBuy.length
+        ? {
+            note:
+              "sell/buy only sum items with orders on that side here. " +
+              [noSell.length ? `No sell orders: ${noSell.join(", ")}.` : "", noBuy.length ? `No buy orders: ${noBuy.join(", ")}.` : ""]
+                .filter(Boolean).join(" ") +
+              " *_estimate fills those gaps with CCP's universe average price.",
+          }
+        : {}),
     },
     items,
     ...(unknown.length ? { unrecognized: unknown } : {}),
