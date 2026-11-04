@@ -85,6 +85,15 @@ withSde("a saved plan gives the same sheets and templates every time, without fe
   assert.equal(alt.json.sheets, undefined);
   const nobody = await callTool(ctx, "pi_plans", { name: "Home plan", characters: ["Nobody"] });
   assert.match(nobody.text, /no colonies for Nobody\. Characters in it: /);
+  // check: nothing built yet in the fake ESI, so every planned colony says so.
+  const check = await callTool(ctx, "pi_plans", { name: "Home plan", check: true, characters: ["Plan Main"] });
+  assert.equal(check.isError, false, check.text);
+  assert.equal(check.json.summary, `0 of 1 characters match the plan; ${a.json.colonies.filter((l: string) => l.startsWith("Plan Main")).length} issues`);
+  assert.equal(check.json.characters[0].character, "Plan Main");
+  assert.match(check.json.characters[0].built, /^0 of \d+ colonies$/);
+  for (const line of check.json.characters[0].colonies) assert.match(line, /^[IVX]+ \(\w+\): not built yet$/);
+  assert.equal(ctx.esi.callsTo("/characters/90500001/planets").at(-1)!.opts.scope, "esi-planets.manage_planets.v1");
+  assert.equal(check.json.routine, undefined, "check answers only the check");
   const unknown = await callTool(ctx, "pi_plans", { name: "Other" });
   assert.match(unknown.text, /No saved plan "Other"\. Saved plans: Home plan\./);
 });
@@ -100,7 +109,10 @@ withSde("pi_plan_export writes one template per colony and a build book", async 
   const files = readdirSync(folder);
   assert.equal(files.filter((f) => f.endsWith(".json")).length, r.json.templates_written.length);
   for (const f of r.json.templates_written) {
-    const t = JSON.parse(readFileSync(join(folder, f), "utf8"));
+    const text = readFileSync(join(folder, f), "utf8");
+    assert.match(text, /^\{"CmdCtrLv": \d, "Cmt": .*"Diam": \d+\.\d+, "L": \[/, "written the way the client writes templates");
+    assert.ok(!text.includes("\n"), "one line");
+    const t = JSON.parse(text);
     checkTemplate(t);
     assert.equal(`${t.Cmt}.json`, f);
   }

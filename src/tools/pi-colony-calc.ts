@@ -14,7 +14,7 @@ import { READ_ONLY, characterParam, handler, reply } from "./helpers.js";
 import { typeRef } from "./universe.js";
 import { DEFAULT_YIELD_AT_100 } from "./pi-optimize.js";
 import { setupSteps } from "../pi-setup.js";
-import { buildTemplate, pinDistanceKm, templateFileName, templateFromEsi, type TemplateResult } from "../pi-template.js";
+import { buildTemplate, pinDistanceKm, templateFileName, templateFromEsi, templateText, type TemplateResult } from "../pi-template.js";
 
 const SCOPE = "esi-planets.manage_planets.v1";
 const n0 = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -400,7 +400,7 @@ export function registerPiColonyCalcTool(server: McpServer, ctx: Ctx) {
           }
           : undefined,
         notes: notes.length ? notes : undefined,
-      }, { texts: template ? [JSON.stringify(template.template)] : [] });
+      }, { texts: template ? [templateText(template.template)] : [] });
     }),
   );
 }
