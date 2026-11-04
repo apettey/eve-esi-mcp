@@ -13,7 +13,7 @@ import { log } from "../util.js";
  * Only the datasets the tools need are imported; localized strings keep English only.
  */
 
-export const SDE_SCHEMA_VERSION = 4;
+export const SDE_SCHEMA_VERSION = 5;
 
 const SCHEMA = `
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
@@ -55,6 +55,7 @@ CREATE TABLE factions (id INTEGER PRIMARY KEY, name TEXT);
 CREATE TABLE blueprints (id INTEGER PRIMARY KEY, max_runs INTEGER, data TEXT);
 CREATE TABLE blueprint_products (product_id INTEGER, blueprint_id INTEGER, activity TEXT);
 CREATE INDEX blueprint_products_product ON blueprint_products (product_id);
+CREATE TABLE pi_schematics (id INTEGER PRIMARY KEY, name TEXT, cycle_time INTEGER, output_type_id INTEGER, output_qty INTEGER, inputs TEXT);
 `;
 
 const EFFECT_SLOTS: Record<number, string> = {
@@ -278,6 +279,14 @@ export async function buildSde(home: string, build: number, userAgent: string): 
       bp.run(r._key, r.maxProductionLimit ?? null, JSON.stringify(r.activities ?? {}));
       for (const [activity, a] of Object.entries<Row>(r.activities ?? {}))
         for (const p of a.products ?? []) bpp.run(p.typeID, r._key, activity);
+    });
+
+    // Planetary interaction schematics: one output and its inputs as [[type_id, qty], ...].
+    const ps = ins("INSERT INTO pi_schematics VALUES (?,?,?,?,?,?)");
+    await eachLine(zip, entries, "planetSchematics.jsonl", (r) => {
+      const out = (r.types ?? []).find((t: Row) => !t.isInput);
+      const inputs = (r.types ?? []).filter((t: Row) => t.isInput).map((t: Row) => [t._key, t.quantity]);
+      if (out) ps.run(r._key, en(r.name), r.cycleTime, out._key, out.quantity, JSON.stringify(inputs));
     });
 
     const m = ins("INSERT INTO meta VALUES (?,?)");
