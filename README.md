@@ -19,7 +19,7 @@ An [MCP](https://modelcontextprotocol.io) server for EVE Online's [ESI API](http
 | Items & universe | `search_items`, `item_info`, `lookup`, `system_info` (includes wormhole class, effect and statics), `wormhole_type` (K162, H296, ...), `route_plan`, `server_status` |
 | Market & money | `market_prices`, `appraise`, `market_orders` (with undercut detection), `wallet`, `contracts` |
 | Industry | `industry` (jobs and blueprints), `planets` (PI extractor timers, storage) |
-| Planetary interaction | `pi_system_planets` (what a system's planets can make, every alt's colonies and free slots, what-if planet types), `pi_product` (a commodity's full chain, planet needs, balanced factories, tax, uses) |
+| Planetary interaction | `pi_system_planets` (what a system's planets can make, every alt's colonies and free slots, what-if planet types), `pi_product` (a commodity's full chain, planet needs, balanced factories, tax, uses), `pi_optimize` (best PI setup for a system from your scan readings: every alt's slots assigned to extraction or factory colonies, ISK/day at market prices within input, haul and market-volume limits) |
 | Comms | `mail_list`, `mail_read`, `mail_send`, `notifications`, `killmails` (fits of losses as EFT) |
 | Enemy doctrines | `doctrine_from_killmails` (zKillboard URLs, filters or killmail ids), `doctrine_from_battle_report` (both sides of a fight), as bundles for eve-fit's `save_doctrine` |
 | Game client | `ui_action` (set destination, add waypoint, open market or info windows) |

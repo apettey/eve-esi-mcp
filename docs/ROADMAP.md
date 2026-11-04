@@ -16,16 +16,18 @@ The tool-test harness (`src/test/harness.ts`) arrived after most tools. The tool
 ## Planned: planetary interaction
 
 Research and design are in `docs/PLANETARY_INTERACTION.md`. Shipped: PI schematics in the SDE index (schema 5),
-`pi_system_planets` (it also covers "what can these planet types make" through `extra_planet_types`) and `pi_product`.
-Next, in order:
+`pi_system_planets`, `pi_product` and `pi_optimize` (which also covers the planned `pi_colony_plan`: it assigns every
+alt's slots). Next:
 
 1. Extend `planets` to cover all characters by default, with projected extractor output, per-planet input/output
    balance and storage time-to-full.
-2. `pi_optimize`: rank setups for a planet from player-supplied scan abundance and/or observed ESI `qty_per_cycle`.
-   ESI and the SDE have no per-planet resource data, so abundance must come from the player or from observed yields.
-3. `pi_colony_plan`: assign all PI-capable alts' colony slots in a system to roles that close a chain.
+2. Calibrate `pi_optimize`: read real `qty_per_cycle` from existing extractors to set `p0_per_hour_at_100` per
+   character instead of the 8,000 default, and model extractor decay over the program length.
+3. `pi_optimize` limits: the greedy assignment can pick a factory before the colonies that would feed it exist (a
+   rebalancing pass fixes the input split afterwards, but not the choice). Link costs are a flat 6% reserve. Only
+   extraction templates with two extractors are considered.
 4. Verify live: whether depletion is shared between characters on one planet, and the client-only constants (CC
-   levels, extractor decay/cycle brackets, storage volumes).
+   levels, launchpad/storage volumes, extractor decay/cycle brackets).
 
 ## Known gaps
 
