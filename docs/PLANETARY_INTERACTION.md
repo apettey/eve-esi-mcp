@@ -430,6 +430,20 @@ enumeration over the realistic templates (below) plus a greedy across-colony ass
 needed. Keep it deterministic and explain the pick: "Storm planet, Suspended Plasma 82% / Ionic 64%: 2 ECUs → Plasmoids
 + Electrolytes → Rocket Fuel, 4.1 P2/h, ≈ X ISK/day after 5% tax".
 
+### 5.2a As built (`pi_optimize`)
+
+- **Extraction colonies:** every resource pair on every planet (including two extractors on one resource). The most heads
+  that fit the command center (CPU/PG from the SDE, CC levels from the client, 6% kept for links). The output is sold
+  as P1 or combined into P2, whichever pays more. Yield = `p0_per_hour_at_100 × reading/100 × heads/10` (an assumption,
+  shown in the output).
+- **Factory colonies:** any P2-P4 product. Inputs come first from the plan's own colonies (forgoing their sale value
+  and their export volume), and the rest are bought at the lowest sell order. Sized by the command center and by a
+  restock interval that must fit the launchpad and one storage facility. Limited by the daily input budget, the daily
+  haul budget, and the share of each item's daily market volume.
+- **Assignment:** greedy by ISK/day over all characters' slots. Each character gets one colony per planet, extracting
+  characters per planet are capped, and the same resource pair isn't extracted twice on one planet. A final pass
+  re-splits factory inputs lowest tier first, so local output feeds factories before anything is bought.
+
 ### 5.3 Layout templates the optimiser picks from
 
 | Template | Structures (typical, CC level 4–5) | Use when |

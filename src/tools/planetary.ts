@@ -68,7 +68,7 @@ interface CharacterPi {
 }
 
 /** One character's PI capacity (from skills) and its colonies in `systemId`. Never throws: problems become `note`. */
-async function characterPi(ctx: Ctx, sde: Sde, c: StoredCharacter, systemId: number): Promise<CharacterPi> {
+export async function characterPi(ctx: Ctx, sde: Sde, c: StoredCharacter, systemId: number): Promise<CharacterPi> {
   const out: CharacterPi = { character: c.name };
   const notes: string[] = [];
   try {
@@ -99,6 +99,13 @@ async function characterPi(ctx: Ctx, sde: Sde, c: StoredCharacter, systemId: num
   return out;
 }
 
+/** System id from a name/id, or the character's current system when omitted or 'current'. */
+export async function resolveSystem(ctx: Ctx, sde: Sde, system: string | undefined, character: string | undefined): Promise<number> {
+  if (system && system.toLowerCase() !== "current") return systemRef(sde, system);
+  const c = ctx.character(character);
+  return (await ctx.esi.get<any>(`/characters/${c.id}/location`, { character: c, scope: "esi-location.read_location.v1" })).solar_system_id;
+}
+
 export function registerPlanetaryTools(server: McpServer, ctx: Ctx) {
   server.registerTool(
     "pi_system_planets",
@@ -125,11 +132,7 @@ export function registerPlanetaryTools(server: McpServer, ctx: Ctx) {
     handler(async ({ system, character, characters, extra_planet_types, include_characters }) => {
       const sde = await ctx.sde();
       const pi = piData(sde);
-      let systemId: number;
-      if (!system || system.toLowerCase() === "current") {
-        const c = ctx.character(character);
-        systemId = (await ctx.esi.get<any>(`/characters/${c.id}/location`, { character: c, scope: "esi-location.read_location.v1" })).solar_system_id;
-      } else systemId = systemRef(sde, system);
+      const systemId = await resolveSystem(ctx, sde, system, character);
 
       const planets = sde.planetsInSystem(systemId);
       const typesHere = new Map<string, string[]>();
