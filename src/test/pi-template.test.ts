@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import test from "node:test";
 import { piData } from "../pi.js";
-import { TEMPLATE_SPACING, buildTemplate, pinDistanceKm, templateFileName, templateFromEsi } from "../pi-template.js";
+import { TEMPLATE_SPACING, buildTemplate, pinDistanceKm, templateFileName, templateFromEsi, templateText } from "../pi-template.js";
 import { sde, withSde } from "./harness.js";
 import { checkTemplate } from "./pi-template-check.js";
 
@@ -103,4 +104,16 @@ withSde("templateFromEsi copies a real colony: structures, links and routes with
   assert.deepEqual(t.L, [{ D: 1, Lv: 0, S: 2 }, { D: 2, Lv: 1, S: 3 }, { D: 1, Lv: 0, S: 4 }]);
   assert.deepEqual(t.R.map((r) => r.P), [[1, 2, 3], [3, 2, 1], [4, 1]]);
   assert.ok(links.totalKm > 0);
+});
+
+test("templates are written the way the client writes them: one line, Diam as a decimal", () => {
+  // Saved by the client (with its literal \r\n markers removed); the client rejected ours with "Diam": 10480.
+  const client = '{"CmdCtrLv": 5, "Cmt": "Miner - 00 - Chiral Structures", "Diam": 8160.0, "L": [{"D": 9, "Lv": 0, "S": 8}, ' +
+    '{"D": 8, "Lv": 0, "S": 5}], "P": [{"H": 0, "La": 1.5655, "Lo": 2.65974, "S": 2401, "T": 2481}, ' +
+    '{"H": 10, "La": 1.58638, "Lo": 2.63474, "S": 2306, "T": 3068}, {"H": 0, "La": 1.58633, "Lo": 2.65906, "S": null, "T": 2256}], ' +
+    '"Pln": 11, "R": [{"P": [8, 6, 1], "Q": 3000, "T": 2306}, {"P": [5, 8], "Q": 290112, "T": 2306}]}';
+  assert.equal(templateText(JSON.parse(client)), client);
+  const whole = templateText({ CmdCtrLv: 4, Cmt: 'A "quoted" name', Diam: 10480, L: [], P: [{ H: 0, La: 2, Lo: 3, S: null, T: 1 }], Pln: 2016, R: [] });
+  assert.equal(whole, '{"CmdCtrLv": 4, "Cmt": "A \\"quoted\\" name", "Diam": 10480.0, "L": [], "P": [{"H": 0, "La": 2.0, "Lo": 3.0, "S": null, "T": 1}], "Pln": 2016, "R": []}');
+  assert.ok(!whole.includes("\n"));
 });

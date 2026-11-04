@@ -550,6 +550,17 @@ from its own character's colonies first (nothing to pass through the hangar), th
 spare, so inputs come from few places; ties go by orbit and name, so the split never changes. Cargo per run is given
 for normal and factory days. It assumes the characters share a hangar (a corp hangar in the structure).
 
+`pi_plans check` reads each plan character's colonies in the plan's system from ESI and gives one line per planned
+colony: ok (heads, factories, time left, factory input stock) or what differs: not built, command center level,
+extractor resource or total heads per resource (the split between two extractors on one resource doesn't matter),
+programs not started, ended or of another length, factory schematics and counts, inputs no route brings, output no
+route carries away, direct feeds that are too small, and factory colonies with under a day of any input (with the
+restock to bring). Colonies in the system the plan doesn't have are listed. ESI only refreshes a colony when it is
+opened in game, so the oldest update time is shown; head positions and hotspots can't be checked.
+
+Templates are written the way the client writes them: one line, keys sorted, `", "`/`": "` separators, `Diam`,
+`La` and `Lo` as decimals. The client rejects `"Diam": 10480` (an integer) as "not in the right format".
+
 ### 5.3 Layout templates the optimiser picks from
 
 | Template | Structures (typical, CC level 4–5) | Use when |

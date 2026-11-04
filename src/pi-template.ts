@@ -202,5 +202,26 @@ export function templateFromEsi(
   return { template, links: { count: L.length, totalKm: s.diameterKm ? linkLength(template) : 0 } };
 }
 
+/**
+ * A template as the text the client accepts (file or clipboard), written the way the client writes it: one line, keys
+ * sorted, Python-style separators, and Diam/La/Lo as decimals. The client is Python and rejects "Diam": 10480 (an int)
+ * as "not in the right format"; client-saved templates always have "Diam": 10480.0.
+ */
+export function templateText(t: PiTemplate): string {
+  const dec = (x: number) => (Number.isInteger(x) ? `${x}.0` : String(x));
+  const int = (x: number) => String(Math.round(x));
+  const obj = (fields: Array<[string, string]>) => `{${fields.map(([k, v]) => `${JSON.stringify(k)}: ${v}`).join(", ")}}`;
+  const list = (items: string[]) => `[${items.join(", ")}]`;
+  return obj([
+    ["CmdCtrLv", int(t.CmdCtrLv)],
+    ["Cmt", JSON.stringify(t.Cmt)],
+    ["Diam", dec(t.Diam)],
+    ["L", list(t.L.map((l) => obj([["D", int(l.D)], ["Lv", int(l.Lv)], ["S", int(l.S)]])))],
+    ["P", list(t.P.map((p) => obj([["H", int(p.H)], ["La", dec(p.La)], ["Lo", dec(p.Lo)], ["S", p.S == null ? "null" : int(p.S)], ["T", int(p.T)]])))],
+    ["Pln", int(t.Pln)],
+    ["R", list(t.R.map((r) => obj([["P", list(r.P.map(int))], ["Q", int(r.Q)], ["T", int(r.T)]])))],
+  ]);
+}
+
 /** File name for a template: the name without characters Windows doesn't allow. */
 export const templateFileName = (name: string) => `${name.replace(/[<>:"/\\|?*]+/g, "-").trim()}.json`;

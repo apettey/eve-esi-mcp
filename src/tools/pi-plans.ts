@@ -3,13 +3,15 @@ import { join } from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Ctx } from "../context.js";
-import { piData, tierName } from "../pi.js";
+import { piData, tierName, type PiData } from "../pi.js";
+import type { Sde } from "../sde/db.js";
+import { checkPlan, type ActualColonies } from "../pi-check.js";
 import { pinCosts } from "../pi-layout.js";
 import {
   colonySheet, colonyTemplates, defaultTemplateFolder, haulLine, haulPerTrip, listPlans, loadPlan, planMarkdown, routine, type SavedPlan,
 } from "../pi-plan.js";
-import { templateFileName } from "../pi-template.js";
-import { UserError, isk } from "../util.js";
+import { templateFileName, templateText } from "../pi-template.js";
+import { UserError, duration, isk, mapLimit } from "../util.js";
 import { READ_ONLY, handler, reply } from "./helpers.js";
 
 const day = (perHour: number) => isk(perHour * 24);
@@ -25,6 +27,48 @@ function only(p: SavedPlan, characters?: string[]): SavedPlan {
   return { ...p, colonies };
 }
 
+const SCOPE = "esi-planets.manage_planets.v1";
+
+/** pi_plans `check`: each character's colonies from ESI against the plan. */
+async function checkReply(ctx: Ctx, sde: Sde, pi: PiData, p: SavedPlan) {
+  const now = Date.now();
+  const names = [...new Set(p.colonies.map((c) => c.character))];
+  const actual = new Map<string, ActualColonies | Error>();
+  await mapLimit(names, 3, async (name) => {
+    try {
+      const c = ctx.character(name);
+      const planets = (await ctx.esi.get<any[]>(`/characters/${c.id}/planets`, { character: c, scope: SCOPE }))
+        .filter((x) => x.solar_system_id === p.system.id);
+      const layouts = new Map<number, any>();
+      await mapLimit(planets, 4, async (x) => {
+        layouts.set(x.planet_id, await ctx.esi.get<any>(`/characters/${c.id}/planets/${x.planet_id}`, { character: c, scope: SCOPE }));
+      });
+      actual.set(name, { planets, layouts });
+    } catch (err) {
+      actual.set(name, err as Error);
+    }
+  });
+  const ordered = new Map(names.filter((n) => actual.has(n)).map((n) => [n, actual.get(n)!]));
+  const checks = checkPlan(sde, pi, p, ordered, now);
+  const issues = checks.reduce((n, c) => n + c.colonies.reduce((m, x) => m + x.issues.length, 0) + c.extra.length + (c.unavailable ? 1 : 0), 0);
+  const matching = checks.filter((c) => c.ok).length;
+  return {
+    name: p.name,
+    system: p.system.name,
+    summary: `${matching} of ${checks.length} characters match the plan` + (issues ? `; ${issues} issue${issues === 1 ? "" : "s"}` : ""),
+    characters: checks.map((c) => ({
+      character: c.character,
+      status: c.unavailable ? "couldn't read colonies" : c.ok ? "matches the plan" : `${c.colonies.filter((x) => !x.ok).length + (c.extra.length ? 1 : 0)} to fix`,
+      built: `${c.built} of ${c.planned} colonies`,
+      colonies: c.colonies.map((x) => x.line),
+      not_in_plan: c.extra.length ? c.extra.map((x) => `colony on ${x} isn't in the plan`) : undefined,
+      data_age: c.oldestUpdateMs ? `${duration(now - c.oldestUpdateMs)} (oldest colony update)` : undefined,
+      unavailable: c.unavailable,
+    })),
+    note: "ESI only refreshes a colony when it is opened in game; extractor head positions and hotspots can't be checked.",
+  };
+}
+
 export function registerPiPlanTools(server: McpServer, ctx: Ctx) {
   server.registerTool(
     "pi_plans",
@@ -36,14 +80,18 @@ export function registerPiPlanTools(server: McpServer, ctx: Ctx) {
         "planet's steps, exactly how much of each good to collect and which factory colony or the stockpile it goes to, cargo " +
         "m³), each colony (character, planet, what it makes, ISK/day at the " +
         "prices when saved, its template file name), goods moved between colonies, the haul per trip, a build sheet per colony " +
-        "and, with `templates`, an importable EVE colony template per colony as extra text blocks. pi_plan_export writes the " +
-        "templates to the game's template folder. Read-only.",
+        "and, with `templates`, an importable EVE colony template per colony as extra text blocks. With `check`: whether what " +
+        "each character built matches the plan, one line per colony (missing colonies, command center level, extractor " +
+        "resources and heads, programs ended or of the wrong length, factory schematics and counts, unrouted inputs and " +
+        "outputs, factory input stock and idle factories). pi_plan_export writes the templates to the game's template " +
+        "folder. Read-only.",
       inputSchema: {
         name: z.string().optional().describe("Plan name, e.g. 'Home no imports'. Omit to list saved plans."),
         characters: z.array(z.string()).max(50).optional().describe("Only these characters' colonies."),
         routine: z.boolean().optional().describe("Include the routine for every undock (default true)."),
         sheets: z.boolean().optional().describe("Include the build sheet per colony (default true)."),
         templates: z.boolean().optional().describe("Add each colony's template JSON as a text block, in colony order (default false)."),
+        check: z.boolean().optional().describe("Compare what each character has built with the plan instead (reads their colonies from ESI)."),
       },
       annotations: READ_ONLY,
     },
@@ -62,6 +110,7 @@ export function registerPiPlanTools(server: McpServer, ctx: Ctx) {
       const pi = piData(sde);
       const full = loadPlan(ctx.cfg.home, a.name);
       const p = only(full, a.characters);
+      if (a.check) return reply(await checkReply(ctx, sde, pi, p));
       const templates = colonyTemplates(sde, pi, pinCosts(sde), p);
       const h = haulPerTrip(sde, full);
       const r = a.routine === false ? undefined : routine(sde, pi, full);
@@ -105,7 +154,7 @@ export function registerPiPlanTools(server: McpServer, ctx: Ctx) {
         },
         sheets: a.sheets === false ? undefined : templates.map((t) => ({ colony: t.name, steps: colonySheet(sde, pi, full, t.colony) })),
         template_note: a.templates ? "Each template's JSON follows as a text block, in the order of `colonies`." : undefined,
-      }, { texts: a.templates ? templates.map((t) => JSON.stringify(t.template)) : [] });
+      }, { texts: a.templates ? templates.map((t) => templateText(t.template)) : [] });
     }),
   );
 
@@ -141,7 +190,7 @@ export function registerPiPlanTools(server: McpServer, ctx: Ctx) {
         for (const t of templates) {
           const path = join(folder, t.file);
           if (existsSync(path)) replaced++;
-          writeFileSync(path, JSON.stringify(t.template, null, 2));
+          writeFileSync(path, templateText(t.template));
         }
         if (a.build_book !== false) {
           book = join(folder, templateFileName(p.name).replace(/\.json$/, ".md"));

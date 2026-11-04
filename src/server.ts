@@ -38,7 +38,8 @@ Prefer the composite tools — they each replace many raw ESI calls:
   alt from the player's scan readings (ask for them, or read a scan-window screenshot), and every character's colony
   status with what needs attention first. pi_colony_calc checks one layout (or a real colony): fit, output, ISK, fixes.
   To build a plan, save it (pi_optimize save_as): pi_plans then shows the same plan, build sheets and colony templates
-  every time, and pi_plan_export writes the templates into the game's template folder (confirm first).
+  every time (pi_plans check compares what each character built with it), and pi_plan_export writes the templates
+  into the game's template folder (confirm first).
 - esi_request covers any remaining ESI route.
 Static data (items, attributes, systems) is served locally; the first call after install may take ~1 minute while
 the official SDE is downloaded and indexed.

@@ -21,7 +21,9 @@ Research and design are in `docs/PLANETARY_INTERACTION.md`. Shipped: PI schemati
 attention list, extractor output, balance, route checks, storage). Program length is modelled in both planners,
 `pi_optimize` runs a local search after its greedy pass, `setup_guide` gives a build sheet per colony, and `templates`
 gives an importable EVE colony template per colony. Plans can be saved (`save_as`), shown unchanged (`pi_plans`) and
-written to the game's template folder (`pi_plan_export`), with a routine for every undock. Next:
+written to the game's template folder (`pi_plan_export`), with a routine for every undock; `pi_plans check` compares
+what each character built with the plan. Templates are written as the client writes them (one line, `Diam` a
+decimal: the client rejects an integer). Next:
 
 1. Verify live (needs the game client and running extractors; the tools can't read these from ESI): the extractor decay
    curve against in-game per-cycle bars; the cycle length and `qty_per_cycle` on 2-, 4- and 7-day programs (the

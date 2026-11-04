@@ -7,6 +7,7 @@ import { piData, tierName, type PiData } from "../pi.js";
 import { analyzeColony, programFactor, yieldAt100 } from "../pi-colony.js";
 import { optimize, pinCosts, programLabel, type PlanetInput, type Price, type Slot } from "../pi-optimize.js";
 import { colonySheet, colonyTemplates, haulLine, haulPerTrip as haulPlan, savePlan, toSavedPlan } from "../pi-plan.js";
+import { templateText } from "../pi-template.js";
 import { marketSummary, resolveMarketScope } from "../market.js";
 import { UserError, isk, mapLimit } from "../util.js";
 import { READ_ONLY, characterParam, handler, reply } from "./helpers.js";
@@ -264,7 +265,7 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
       let templates: unknown;
       if (a.templates) {
         templates = colonyTemplates(sde, pi, pinCosts(sde), saved).map((t) => {
-          templateTexts.push(JSON.stringify(t.template));
+          templateTexts.push(templateText(t.template));
           return {
             name: t.name, file: t.file, structures: t.template.P.length, links: t.links,
             fits: t.fits ? undefined : "links push it over the command center's CPU/powergrid: drop a factory after importing",
