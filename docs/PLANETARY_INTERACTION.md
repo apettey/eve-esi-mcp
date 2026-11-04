@@ -103,6 +103,13 @@ noise        = max((cos(phase + t/12) + cos(phase/2 + t×0.2) + cos(t×0.5)) / 3
 cycle_output = floor(bar_width × decay × (1 + 0.8 × noise))
 ```
 
+**Program length** (used by `pi_optimize` and `pi_colony_calc`). Per hour the curve gives 4 × `qty_per_cycle` ×
+decay(t) whatever the cycle length, so at the same spot a longer program loses output per hour only to decay. The
+tools assume the cycle doubles with each doubling of program length (one day: 15 min, observed; 2 days: 30 min; 3-4
+days: 1 h; 5-8 days: 2 h; up to 14 days: 4 h) and that `qty_per_cycle` doesn't change with program length. That gives
+one-day output per hour × 0.78 (2 days), 0.56 (4 days), 0.41 (7 days), 0.26 (14 days). **Unverified beyond one day.**
+Calibration converts each real extractor from its own program length to a one-day program.
+
 Implications: shorter programs give more P0 per hour (less decay) but need more logins. Heads that overlap
 (`ecuOverlapFactor`) and depleted spots lower `qty_per_cycle`, and depletion regenerates over days. The ESI resource
 heat map isn't exposed, so the tools can't pick hotspots for the player.
@@ -472,6 +479,22 @@ colony:
 - **Optimiser ranking:** greedy by ISK/day and greedy by ISK/day per share of the haul and input budgets; the better
   total wins. Ranking by ISK alone let one bulky factory use up the haul budget that a dozen extraction colonies could
   have used.
+- **Local search:** after the greedy pass, each chosen colony (a resource pair on a planet, or a factory product) is
+  banned in turn and the plan rebuilt; an improvement of more than 0.2% is kept and the search restarts, up to 80
+  rebuilds. Static lookups are cached, so one rebuild of a 32-slot plan takes milliseconds. On the home system (Nov
+  2026) it added 9% (80.9m → 87.3m ISK/day) by dropping seven extraction pairs that crowded out better ones.
+- **Program length:** `program_hours` (and per character, `program_hours_by_character`) scales extraction by the
+  factor in §1, and an extraction colony gets storage when a whole program's output won't fit its launchpad. Because
+  the colonies are limited by basic factories rather than extraction, two-day programs cost the home system only
+  8% (87.3m → 80.0m ISK/day), but the plan then buys more inputs (47m → 81m ISK/day).
+
+### 5.2d Routes in real colonies (`planets`)
+
+Factory inputs are checked against ESI routes, pin by pin: an input no route brings stops that factory (and its
+output is removed from the colony's production); a factory fed straight from an extractor or another factory gets the
+routed share of that source's output; a factory fed from storage or a launchpad uses the planet-wide balance. Output
+from an extractor or factory that no route carries away is flagged. Checked live on 7 real colonies (all routed via
+storage): no false alarms.
 
 ### 5.3 Layout templates the optimiser picks from
 
@@ -611,7 +634,8 @@ assumed.
 ### 6.4 Open questions / to verify live
 
 - Capture one real extractor (`qty_per_cycle`, heads, program length) and the in-game per-cycle bars to confirm the
-  decay formula and cycle brackets before shipping projections.
+  decay formula, and set a 2-, 4- and 7-day program on the same spot to confirm the cycle brackets and whether
+  `qty_per_cycle` changes with program length (the program-length model assumes it doesn't).
 - Confirm the CC level CPU/PG/cost table and the storage volumes in game.
 - Is extraction depletion shared between characters on the same planet, or per character? This decides whether
   stacking alts on one rich planet is free.

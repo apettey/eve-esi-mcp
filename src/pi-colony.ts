@@ -24,6 +24,33 @@ export function cycleOutput(base: number, cycleIndex: number, cycleSeconds: numb
   return Math.floor(barWidth * decay * (1 + 0.8 * noise));
 }
 
+/**
+ * Cycle length for an extractor program of `hours`. Observed live: 15 minutes on one-day programs. Longer programs are
+ * assumed to double the cycle with each doubling of length (2 days: 30 min, 3-4 days: 1 h, 5-8 days: 2 h, up to 14
+ * days: 4 h). Unverified beyond one day: see docs/PLANETARY_INTERACTION.md section 1.
+ */
+export function programCycleSeconds(hours: number): number {
+  return 900 * 2 ** Math.max(0, Math.ceil(Math.log2(hours / 24) - 1e-9));
+}
+
+/** Mean decay over a program of `hours` (decay term of the curve only; the noise term averages out). */
+function meanDecay(hours: number): number {
+  const cycle = programCycleSeconds(hours);
+  const cycles = Math.max(1, Math.round((hours * 3600) / cycle));
+  const bar = cycle / 900;
+  let sum = 0;
+  for (let i = 0; i < cycles; i++) sum += 1 / (1 + (i + 0.5) * bar * 0.012);
+  return sum / cycles;
+}
+
+/**
+ * Output per hour of a program of `hours` relative to a one-day program at the same spot (same qty_per_cycle). Per
+ * hour the curve gives 4 x qty_per_cycle x decay(t), whatever the cycle length, so longer programs only lose to decay.
+ */
+export function programFactor(hours: number): number {
+  return meanDecay(hours) / meanDecay(24);
+}
+
 export interface ExtractorProgram {
   cycles: number;
   total: number;
@@ -80,6 +107,12 @@ export interface ColonyAnalysis {
   /** m3 per hour that piles up (made but not used on the planet), at current extractor rates. */
   surplusM3PerHour: number;
   contents: Map<number, number>;
+  /** Factory inputs that no route brings to the factory: those factories can't run. */
+  unroutedInputs: Array<{ product: number; input: number; factories: number }>;
+  /** Extractor or factory output that no route carries away. */
+  unroutedOutputs: Array<{ type: number; from: "extractor" | "factory"; pins: number }>;
+  /** Factories fed straight from another extractor or factory (not via storage) that get less than they need. */
+  routeShortfalls: Array<{ product: number; input: number; factories: number; need: number; have: number }>;
 }
 
 export function analyzeColony(sde: Sde, pi: PiData, layout: any, nowMs: number): ColonyAnalysis {
@@ -93,9 +126,15 @@ export function analyzeColony(sde: Sde, pi: PiData, layout: any, nowMs: number):
   const bump = (m: Map<number, number>, k: number, v: number) => m.set(k, (m.get(k) ?? 0) + v);
   let storedM3 = 0;
   let capacityM3 = 0;
+  const kind = new Map<number, "extractor" | "factory" | "store">();
+  /** Output per hour of each extractor (now) and factory (full speed, before input shortages). */
+  const rateOut = new Map<number, number>();
+  const factoryPins: Array<{ pin: number; product: number }> = [];
+  const extractorPins: Array<{ pin: number; product: number }> = [];
 
   for (const pin of pins) {
     const group = sde.type(pin.type_id)?.group_id;
+    if (group === GROUP.launchpad || group === GROUP.storage || group === GROUP.commandCenter) kind.set(pin.pin_id, "store");
     if (group === GROUP.launchpad) capacityM3 += LAUNCHPAD_M3;
     else if (group === GROUP.storage) capacityM3 += STORAGE_M3;
     else if (group === GROUP.commandCenter) capacityM3 += COMMAND_CENTER_M3;
@@ -116,7 +155,11 @@ export function analyzeColony(sde: Sde, pi: PiData, layout: any, nowMs: number):
         ? extractorProgram(qty, cycleSeconds, installMs, expiryMs, nowMs)
         : null;
       extractors.push({ product: ex.product_type_id, heads: ex.heads?.length ?? 0, cycleSeconds, qtyPerCycle: qty, installMs, expiryMs, program });
-      if (ex.product_type_id && program && expiryMs! > nowMs) bump(made, ex.product_type_id, program.nowPerHour);
+      const running = !!(ex.product_type_id && program && expiryMs! > nowMs);
+      if (running) bump(made, ex.product_type_id, program!.nowPerHour);
+      kind.set(pin.pin_id, "extractor");
+      rateOut.set(pin.pin_id, running ? program!.nowPerHour : 0);
+      if (running) extractorPins.push({ pin: pin.pin_id, product: ex.product_type_id });
       continue;
     }
 
@@ -125,6 +168,8 @@ export function analyzeColony(sde: Sde, pi: PiData, layout: any, nowMs: number):
     const out = [...pi.schematic.values()].find((s) => s.id === sid);
     if (!out) continue;
     bump(factories, out.output, 1);
+    kind.set(pin.pin_id, "factory");
+    factoryPins.push({ pin: pin.pin_id, product: out.output });
     const last = pin.last_cycle_start ? Date.parse(pin.last_cycle_start) : null;
     if (last == null || nowMs - last > 2 * out.cycle * 1000) bump(idleFactories, out.output, 1);
     bump(made, out.output, perHour(pi, out.output));
@@ -136,28 +181,92 @@ export function analyzeColony(sde: Sde, pi: PiData, layout: any, nowMs: number):
     const have = made.get(type) ?? 0;
     if (have < need * 0.98) shortfalls.push({ type, need, have });
   }
-  // Factories that are short of input don't make their full output; scale their output by the worst input coverage.
-  for (const [product, count] of factories) {
-    const s = pi.schematic.get(product)!;
-    const cover = Math.min(1, ...s.inputs.map(([i]) => {
-      const need = used.get(i) ?? 0;
-      return need ? (made.get(i) ?? 0) / need : 1;
-    }));
-    if (cover < 1) made.set(product, (made.get(product) ?? 0) - perHour(pi, product) * count * (1 - cover));
+  // Factories that are short of input don't make their full output. Each factory pin runs at the share its scarcest
+  // input allows: 0 when no route brings an input; the routed share of the source's output when it is fed straight
+  // from an extractor or factory; the planet-wide balance when it is fed from storage (or when ESI gave no routes).
+  const routes: any[] | null = Array.isArray(layout?.routes) ? layout.routes : null;
+  const planetCover = (i: number) => {
+    const need = used.get(i) ?? 0;
+    return need ? Math.min(1, (made.get(i) ?? 0) / need) : 1;
+  };
+  const unrouted = new Map<string, { product: number; input: number; factories: number }>();
+  const routeShort = new Map<string, { product: number; input: number; factories: number; need: number; have: number }>();
+  const ordered = [...factoryPins].sort((x, y) => (pi.tier.get(x.product) ?? 0) - (pi.tier.get(y.product) ?? 0));
+  const fullRate = new Map<number, number>();
+  for (const f of ordered) fullRate.set(f.pin, perHour(pi, f.product));
+  for (const f of ordered) {
+    const s = pi.schematic.get(f.product)!;
+    let cover = 1;
+    for (const [i, q] of s.inputs) {
+      const need = (q * 3600) / s.cycle;
+      if (!routes) { cover = Math.min(cover, planetCover(i)); continue; }
+      const ins = routes.filter((r) => r.destination_pin_id === f.pin && r.content_type_id === i);
+      const key = `${f.product}:${i}`;
+      if (!ins.length) {
+        const u = unrouted.get(key) ?? { product: f.product, input: i, factories: 0 };
+        u.factories++;
+        unrouted.set(key, u);
+        cover = 0;
+        continue;
+      }
+      if (ins.some((r) => kind.get(r.source_pin_id) !== "extractor" && kind.get(r.source_pin_id) !== "factory")) {
+        cover = Math.min(cover, planetCover(i));
+        continue;
+      }
+      let have = 0;
+      for (const r of ins) {
+        const outs = routes.filter((o) => o.source_pin_id === r.source_pin_id && o.content_type_id === i);
+        const total = outs.reduce((t, o) => t + (o.quantity || 1), 0);
+        have += ((rateOut.get(r.source_pin_id) ?? 0) * (r.quantity || 1)) / total;
+      }
+      if (have < need * 0.98) {
+        const rs = routeShort.get(key) ?? { product: f.product, input: i, factories: 0, need: 0, have: 0 };
+        rs.factories++;
+        rs.need += need;
+        rs.have += have;
+        routeShort.set(key, rs);
+      }
+      cover = Math.min(cover, have / need);
+    }
+    rateOut.set(f.pin, fullRate.get(f.pin)! * cover);
+    if (cover < 1) made.set(f.product, (made.get(f.product) ?? 0) - fullRate.get(f.pin)! * (1 - cover));
+  }
+
+  const unroutedOutputs: ColonyAnalysis["unroutedOutputs"] = [];
+  if (routes) {
+    const notOut = (pins: Array<{ pin: number; product: number }>, from: "extractor" | "factory") => {
+      const byType = new Map<number, number>();
+      for (const p of pins) {
+        if (!routes.some((r) => r.source_pin_id === p.pin && r.content_type_id === p.product)) byType.set(p.product, (byType.get(p.product) ?? 0) + 1);
+      }
+      for (const [type, n] of byType) unroutedOutputs.push({ type, from, pins: n });
+    };
+    notOut(extractorPins, "extractor");
+    notOut(factoryPins, "factory");
   }
   let surplusM3PerHour = 0;
   for (const [type, rate] of made) {
     const left = rate - Math.min(rate, used.get(type) ?? 0);
     surplusM3PerHour += left * (sde.type(type)?.volume ?? 0);
   }
-  return { extractors, factories, idleFactories, made, used, shortfalls, storedM3, capacityM3, surplusM3PerHour, contents };
+  return {
+    extractors, factories, idleFactories, made, used, shortfalls, storedM3, capacityM3, surplusM3PerHour, contents,
+    unroutedInputs: [...unrouted.values()], unroutedOutputs, routeShortfalls: [...routeShort.values()],
+  };
+}
+
+/** Program length in hours, from install to expiry. */
+export function programHours(ex: ColonyExtractor): number | null {
+  return ex.installMs != null && ex.expiryMs != null && ex.expiryMs > ex.installMs ? (ex.expiryMs - ex.installMs) / 3_600_000 : null;
 }
 
 /**
- * P0 per hour that a 10-head extractor would give on a resource scanning 100, from one real extractor: its average
- * output over the program, scaled to 10 heads and to a reading of 100. Matches pi_optimize's yield model.
+ * P0 per hour that a 10-head extractor would give on a resource scanning 100 on a one-day program, from one real
+ * extractor: its average output over its own program, scaled to 10 heads, to a reading of 100 and from its program
+ * length to one day. Matches pi_optimize's yield model.
  */
 export function yieldAt100(ex: ColonyExtractor, reading: number): number | null {
   if (!ex.program || !ex.heads || reading <= 0) return null;
-  return ex.program.avgPerHour * (10 / ex.heads) / (reading / 100);
+  const hours = programHours(ex);
+  return ex.program.avgPerHour * (10 / ex.heads) / (reading / 100) / (hours ? programFactor(hours) : 1);
 }
