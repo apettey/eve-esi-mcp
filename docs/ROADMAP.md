@@ -16,14 +16,15 @@ The tool-test harness (`src/test/harness.ts`) arrived after most tools. The tool
 ## Planned: planetary interaction
 
 Research and design are in `docs/PLANETARY_INTERACTION.md`. Shipped: PI schematics in the SDE index (schema 5),
-`pi_system_planets`, `pi_product`, `pi_optimize` (assigns every alt's slots; calibrates its yield from real extractors)
-and `planets` (all characters, attention list, extractor output, balance, storage). Next:
+`pi_system_planets`, `pi_product`, `pi_optimize` (assigns every alt's slots; calibrates its yield from real extractors),
+`pi_colony_calc` (one layout or a real colony, on the same model as the optimiser) and `planets` (all characters,
+attention list, extractor output, balance, storage). Next:
 
 1. `pi_optimize`: model program length (yield per hour falls with longer programs; calibration currently uses whatever
    programs ran). Optional per-planet readings history from repeated `planets` reads to track depletion.
-2. `pi_optimize` limits: greedy assignment can pick a factory before the colonies that would feed it exist (a
-   rebalancing pass fixes the input split afterwards, not the choice). Link costs are a flat 6% reserve. Only
-   two-extractor templates are considered.
+2. `pi_optimize` limits: greedy assignment (two rankings, best kept) can pick a factory before the colonies that would
+   feed it exist (a rebalancing pass fixes the input split afterwards, not the choice). Planned colonies use a 6% link
+   reserve; only real colonies in `pi_colony_calc` get real link lengths. Only two-extractor templates are considered.
 3. `planets`: shortfalls use planet-wide totals, not ESI routes, so a factory fed by a route from storage looks the same
    as one fed directly.
 4. Verify live: whether depletion is shared between characters on one planet; the client-only constants (CC levels,

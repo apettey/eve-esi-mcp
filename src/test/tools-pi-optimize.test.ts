@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { piData } from "../pi.js";
 import {
-  CC_LEVELS, extractionColony, factoriesThatFit, optimize, pinCosts, type OptimizeParams, type PlanetInput, type Price,
+  CC_LEVELS, extractionColony, factoriesThatFit, optimize, optimizeOnce, pinCosts, type OptimizeParams, type PlanetInput, type Price,
 } from "../pi-optimize.js";
 import { callTool, character, sde, testCtx, withSde } from "./harness.js";
 
@@ -64,6 +64,22 @@ withSde("optimize feeds factories from the plan's own colonies before buying", (
   for (const a of plan.assignments) {
     const ids = a.colonies.map((c) => c.planet.id);
     assert.equal(new Set(ids).size, ids.length, "one colony per planet per character");
+  }
+});
+
+withSde("optimize keeps the better of the value and budget-density rankings", () => {
+  const pi = piData(sde!);
+  const planets = [
+    planet("Test I", "Storm", { "Noble Gas": 85, "Ionic Solutions": 60 }, 1),
+    planet("Test VI", "Barren", { "Noble Metals": 60, "Base Metals": 65 }, 6),
+    planet("Test VII", "Ice", { "Heavy Metals": 100, "Aqueous Liquids": 100 }, 7),
+  ];
+  const slots = [{ character: "A", slots: 3, ccLevel: 5 }, { character: "B", slots: 3, ccLevel: 5 }];
+  const tight = { ...PARAMS, maxHaulPerDay: 3_000 };
+  const total = (p: ReturnType<typeof optimize>) => p.assignments.flatMap((a) => a.colonies).reduce((s, c) => s + c.iskPerHour, 0);
+  const best = total(optimize(sde!, pi, pinCosts(sde!), prices(), planets, slots, tight));
+  for (const mode of ["value", "density"] as const) {
+    assert.ok(best >= total(optimizeOnce(sde!, pi, pinCosts(sde!), prices(), planets, slots, tight, mode)) - 1e-6, mode);
   }
 });
 

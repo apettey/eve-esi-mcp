@@ -1,6 +1,6 @@
 import type { Sde } from "./sde/db.js";
 import { perHour, type PiData } from "./pi.js";
-import { LAUNCHPAD_M3, STORAGE_M3 } from "./pi-optimize.js";
+import { COMMAND_CENTER_M3, LAUNCHPAD_M3, STORAGE_M3 } from "./pi-layout.js";
 
 /**
  * Reading a PI colony from its ESI layout: extractor output over the program (with the decay curve), what each factory
@@ -8,7 +8,7 @@ import { LAUNCHPAD_M3, STORAGE_M3 } from "./pi-optimize.js";
  * docs/PLANETARY_INTERACTION.md section 1 ("Extractor output").
  */
 
-export const COMMAND_CENTER_M3 = 500;
+
 const GROUP = { commandCenter: 1027, storage: 1029, launchpad: 1030 } as const;
 
 /**
