@@ -6,6 +6,7 @@ import type { Sde } from "../sde/db.js";
 import { piData, tierName, type PiData } from "../pi.js";
 import { analyzeColony, programFactor, yieldAt100 } from "../pi-colony.js";
 import { optimize, pinCosts, programLabel, type PlanetInput, type Price, type Slot } from "../pi-optimize.js";
+import { colonySheet, colonyTemplates, haulLine, haulPerTrip as haulPlan, savePlan, toSavedPlan } from "../pi-plan.js";
 import { marketSummary, resolveMarketScope } from "../market.js";
 import { UserError, isk, mapLimit } from "../util.js";
 import { READ_ONLY, characterParam, handler, reply } from "./helpers.js";
@@ -101,6 +102,15 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
           .describe("Extractor program length in hours (default 24). Longer programs need fewer logins but give less per hour."),
         program_hours_by_character: z.record(z.string(), z.number().min(1).max(336)).optional()
           .describe('Program length per character where it differs, e.g. {"My Alt": 96} for an alt logged in every 4 days.'),
+        setup_guide: z.boolean().optional()
+          .describe("Add a build sheet per colony (structures, schematics, routes, what to carry each visit) and the haul per trip (default false)."),
+        save_as: z.string().min(1).max(80).optional()
+          .describe("Save the plan under this name (e.g. 'Home no imports'), so pi_plans and pi_plan_export give the same " +
+            "build sheets and templates every time, until you replan. Saving again under the same name replaces it."),
+        templates: z.boolean().optional()
+          .describe("Add an importable EVE colony template per colony (default false): each one follows as its own text block, in the " +
+            "order of `templates`. Import in game: Planetary Industry view > Open template > Import & Export > Load from clipboard, " +
+            "or save as .json in Documents\EVE\PlanetaryInteractionTemplates."),
         restock_days: z.number().min(0.25).max(30).optional()
           .describe("Days between visits to restock a factory colony (default 2). Inputs for that long must fit its launchpad and storage."),
       },
@@ -224,6 +234,45 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
         );
       }
 
+      // The plan in its saved form: build sheets, templates and the haul come from it, so a saved plan reproduces them exactly.
+      const sysName = sde.systemSummary(systemId)?.name ?? String(systemId);
+      const saved = toSavedPlan(a.save_as?.trim() || `${sysName} plan`, { id: systemId, name: sysName }, scope.label, plan, slots, params);
+      const savedPath = a.save_as ? savePlan(ctx.cfg.home, saved) : undefined;
+
+      let setup: unknown;
+      let haulPerTrip: unknown;
+      if (a.setup_guide) {
+        setup = [...new Set(saved.colonies.map((c) => c.character))].map((character) => ({
+          character,
+          colonies: saved.colonies.filter((c) => c.character === character).map((c) => ({
+            colony: `${c.planet.name} (${c.planet.type}): ${c.kind === "extraction" ? "extraction" : `${sde.typeName(c.product!)} factories`}`,
+            steps: colonySheet(sde, pi, saved, c),
+          })),
+        }));
+        const h = haulPlan(sde, saved);
+        haulPerTrip = {
+          every: `${h.every} (restock_days)`,
+          buy_and_bring_in: h.buy.map((x) => haulLine(sde, x)),
+          buy_cost: isk(h.buyCost),
+          take_out_and_sell: h.sell.map((x) => haulLine(sde, x)),
+          m3_in: Math.round(h.m3In),
+          m3_out: Math.round(h.m3Out),
+        };
+      }
+
+      const templateTexts: string[] = [];
+      let templates: unknown;
+      if (a.templates) {
+        templates = colonyTemplates(sde, pi, pinCosts(sde), saved).map((t) => {
+          templateTexts.push(JSON.stringify(t.template));
+          return {
+            name: t.name, file: t.file, structures: t.template.P.length, links: t.links,
+            fits: t.fits ? undefined : "links push it over the command center's CPU/powergrid: drop a factory after importing",
+          };
+        });
+      }
+
+
       return reply({
         system: sde.systemSummary(systemId),
         market: scope.label,
@@ -273,8 +322,16 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
         best_factory_margins: plan.factoryMargins.map((m) =>
           `${sde.typeName(m.product)} (${tierName(pi.tier.get(m.product))}): ${isk(m.iskPerHour)} per factory-hour`),
         skipped_characters: skipped.length ? skipped : undefined,
+        setup,
+        haul_per_trip: haulPerTrip,
+        saved_as: savedPath ? { name: saved.name, note: "Saved: pi_plans shows it, pi_plan_export writes its templates and build book." } : undefined,
+        templates,
+        template_note: a.templates
+          ? "Templates place the structures, links, routes and extractor head counts; drag the heads onto the hotspot and start " +
+            "the programs in game. Each template's JSON is a text block after this one, in the same order."
+          : undefined,
         warnings,
-      });
+      }, { texts: templateTexts });
     }),
   );
 }

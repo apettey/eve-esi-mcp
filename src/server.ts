@@ -15,6 +15,7 @@ import { registerPlanetaryTools } from "./tools/planetary.js";
 import { registerPiOptimizeTool } from "./tools/pi-optimize.js";
 import { registerPiColonyTools } from "./tools/pi-colonies.js";
 import { registerPiColonyCalcTool } from "./tools/pi-colony-calc.js";
+import { registerPiPlanTools } from "./tools/pi-plans.js";
 
 const INSTRUCTIONS = `EVE Online ESI server. Everything comes back with names resolved (items, systems, stations, structures,
 characters, corporations), so you rarely need to look ids up yourself.
@@ -36,6 +37,8 @@ Prefer the composite tools — they each replace many raw ESI calls:
   characters' colonies and free slots included), a commodity's full chain and planet needs, the best setup for every
   alt from the player's scan readings (ask for them, or read a scan-window screenshot), and every character's colony
   status with what needs attention first. pi_colony_calc checks one layout (or a real colony): fit, output, ISK, fixes.
+  To build a plan, save it (pi_optimize save_as): pi_plans then shows the same plan, build sheets and colony templates
+  every time, and pi_plan_export writes the templates into the game's template folder (confirm first).
 - esi_request covers any remaining ESI route.
 Static data (items, attributes, systems) is served locally; the first call after install may take ~1 minute while
 the official SDE is downloaded and indexed.
@@ -58,6 +61,7 @@ export function buildServer(ctx: Ctx): McpServer {
   registerPiOptimizeTool(server, ctx);
   registerPiColonyTools(server, ctx);
   registerPiColonyCalcTool(server, ctx);
+  registerPiPlanTools(server, ctx);
   registerRawTools(server, ctx);
   return server;
 }

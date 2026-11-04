@@ -4,6 +4,7 @@ import {
   CC_LEVELS, extractionColony, factoriesThatFit, optimize, optimizeOnce, pinCosts, type OptimizeParams, type PlanetInput, type Price,
 } from "../pi-optimize.js";
 import { callTool, character, sde, testCtx, withSde } from "./harness.js";
+import { checkTemplate } from "./pi-template-check.js";
 
 const JITA_44 = 60003760;
 const id = (name: string) => sde!.typeIdByName(name)!;
@@ -206,6 +207,51 @@ withSde("pi_optimize plans longer programs for alts that log in less often", asy
   assert.ok(alt.colonies.every((c: string) => /4-day \(1 h cycles\) programs/.test(c)), alt.colonies.join(" | "));
   assert.ok(main.colonies.every((c: string) => /1-day \(15 min cycles\) programs/.test(c)), main.colonies.join(" | "));
   assert.ok(r.json.assumptions.extractor_programs.some((s: string) => /^4-day \(1 h cycles\): \d+% .*\(Planner Alt\)$/.test(s)));
+});
+
+withSde("pi_optimize setup_guide gives a build sheet per colony and the haul per trip", async () => {
+  const r = await callTool(piCtx(), "pi_optimize", {
+    abundance: { VII: { "Aqueous": 100, "Heavy Metals": 100 }, "J105443 II": { "Felsic": 80 } },
+    setup_guide: true, max_input_isk_per_day: 0, // factories only on the plan's own output, so both kinds appear
+  });
+  assert.equal(r.isError, false, r.text);
+  assert.equal(r.json.setup.length, r.json.plan.length);
+  const sheets = r.json.setup.flatMap((x: any) => x.colonies);
+  assert.equal(sheets.length, r.json.plan.reduce((n: number, p: any) => n + p.colonies.length, 0), "one sheet per colony");
+  for (const sh of sheets) assert.match(sh.steps[0], /^Command center at level \d\. Place 1 Launchpad/, sh.colony);
+  const ex = sheets.find((sh: any) => /: extraction$/.test(sh.colony));
+  assert.ok(ex.steps.some((x: string) => /^Extractor 1: .*Route its .* to the launchpad\.$/.test(x)), ex.steps.join(" | "));
+  const fac = sheets.find((sh: any) => / factories$/.test(sh.colony));
+  if (fac) assert.ok(fac.steps.some((x: string) => /^Every 2 days: bring in .*\((from [^)]+|bought)\)/.test(x)), fac.steps.join(" | "));
+  assert.equal(r.json.haul_per_trip.every, "2 days (restock_days)");
+  assert.ok(Array.isArray(r.json.haul_per_trip.take_out_and_sell) && r.json.haul_per_trip.take_out_and_sell.length > 0);
+  // Without the flag the plan stays compact.
+  const plain = await callTool(piCtx(), "pi_optimize", { abundance: { VII: { "Aqueous": 100 } } });
+  assert.equal(plain.json.setup, undefined);
+  assert.equal(plain.json.templates, undefined);
+  assert.equal(plain.texts.length, 0);
+});
+
+withSde("pi_optimize templates gives an importable colony template per colony", async () => {
+  const r = await callTool(piCtx(), "pi_optimize", {
+    abundance: { VII: { "Aqueous": 100, "Heavy Metals": 100 }, "J105443 II": { "Felsic": 80 } },
+    templates: true, max_input_isk_per_day: 0,
+  });
+  assert.equal(r.isError, false, r.text);
+  const colonies = r.json.plan.reduce((n: number, p: any) => n + p.colonies.length, 0);
+  assert.equal(r.json.templates.length, colonies);
+  assert.equal(r.texts.length, colonies, "one JSON block per template, in order");
+  for (const [i, info] of r.json.templates.entries()) {
+    const t = JSON.parse(r.texts[i]);
+    checkTemplate(t);
+    assert.equal(t.Cmt, info.name);
+    assert.match(info.name, /^J105443 [IVX]+ - .+ \(Planner (Main|Alt)\)$/);
+    assert.equal(info.file, `${info.name}.json`);
+    assert.equal(info.structures, t.P.length);
+    assert.match(info.links, /^\d+ links, \d+ km$/, "real link lengths from the planet's size");
+    assert.ok(t.Diam > 1000, "the planet's real diameter");
+  }
+  assert.match(r.json.template_note, /drag the heads onto the hotspot/);
 });
 
 withSde("pi_optimize rejects a resource the planet doesn't have, naming what it has", async () => {

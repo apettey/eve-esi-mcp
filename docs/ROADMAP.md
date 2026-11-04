@@ -18,8 +18,10 @@ The tool-test harness (`src/test/harness.ts`) arrived after most tools. The tool
 Research and design are in `docs/PLANETARY_INTERACTION.md`. Shipped: PI schematics in the SDE index (schema 5),
 `pi_system_planets`, `pi_product`, `pi_optimize` (assigns every alt's slots; calibrates its yield from real extractors),
 `pi_colony_calc` (one layout or a real colony, on the same model as the optimiser) and `planets` (all characters,
-attention list, extractor output, balance, route checks, storage). Program length is modelled in both planners, and
-`pi_optimize` runs a local search after its greedy pass. Next:
+attention list, extractor output, balance, route checks, storage). Program length is modelled in both planners,
+`pi_optimize` runs a local search after its greedy pass, `setup_guide` gives a build sheet per colony, and `templates`
+gives an importable EVE colony template per colony. Plans can be saved (`save_as`), shown unchanged (`pi_plans`) and
+written to the game's template folder (`pi_plan_export`), with a routine for every undock. Next:
 
 1. Verify live (needs the game client and running extractors; the tools can't read these from ESI): the extractor decay
    curve against in-game per-cycle bars; the cycle length and `qty_per_cycle` on 2-, 4- and 7-day programs (the
@@ -31,6 +33,10 @@ attention list, extractor output, balance, route checks, storage). Program lengt
    templates are considered. Optional per-planet readings history from repeated `planets` reads to track depletion.
 3. `planets`: a factory fed from storage is checked against the planet-wide balance, not against what is in storage
    for it.
+4. Colony templates: confirm in game that generated templates import and place as expected (structure spacing in
+   radians, how the client uses `Diam` on a planet of another size, whether routes through an extractor are accepted).
+   On gas giants the template's 0.0122 rad spacing makes links several hundred km long; a tighter layout there would
+   save CPU/PG.
 
 ## Known gaps
 

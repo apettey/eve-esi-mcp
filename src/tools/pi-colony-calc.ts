@@ -13,6 +13,8 @@ import { UserError, isk, mapLimit } from "../util.js";
 import { READ_ONLY, characterParam, handler, reply } from "./helpers.js";
 import { typeRef } from "./universe.js";
 import { DEFAULT_YIELD_AT_100 } from "./pi-optimize.js";
+import { setupSteps } from "../pi-setup.js";
+import { buildTemplate, pinDistanceKm, templateFileName, templateFromEsi, type TemplateResult } from "../pi-template.js";
 
 const SCOPE = "esi-planets.manage_planets.v1";
 const n0 = (n: number) => Math.round(n).toLocaleString("en-US");
@@ -110,7 +112,7 @@ function fromEsi(sde: Sde, pi: PiData, planetId: number, ccLevel: number, esi: a
     const s = sid ? [...pi.schematic.values()].find((x) => x.id === sid) : undefined;
     if (s) factories.set(s.output, (factories.get(s.output) ?? 0) + 1);
   }
-  // Link length: great-circle distance between the pins (ESI gives latitude/longitude in radians).
+  // Link length: great-circle distance between the pins (ESI gives positions in radians, latitude measured from the pole).
   const radiusKm = (sde.planetRadius(planetId) ?? 0) / 1000;
   const byId = new Map(pins.map((p) => [p.pin_id, p]));
   let totalKm = 0;
@@ -118,8 +120,7 @@ function fromEsi(sde: Sde, pi: PiData, planetId: number, ccLevel: number, esi: a
     const a = byId.get(link.source_pin_id);
     const b = byId.get(link.destination_pin_id);
     if (!a || !b || !radiusKm) continue;
-    const h = Math.sin((b.latitude - a.latitude) / 2) ** 2 + Math.cos(a.latitude) * Math.cos(b.latitude) * Math.sin((b.longitude - a.longitude) / 2) ** 2;
-    totalKm += 2 * radiusKm * Math.asin(Math.min(1, Math.sqrt(h)));
+    totalKm += pinDistanceKm({ La: a.latitude, Lo: a.longitude }, { La: b.latitude, Lo: b.longitude }, radiusKm);
   }
   return {
     ccLevel, extractors, storage, launchpads,
@@ -139,7 +140,9 @@ export function registerPiColonyCalcTool(server: McpServer, ctx: Ctx) {
         "launchpads) or `from_colony` to check a real colony from ESI. Returns CPU/powergrid used against the command center " +
         "(and whether it fits), extractor output, what each factory does (busy share, short of what), production per day " +
         "(made, used on the planet, exported, unprocessed P0, bought), ISK/day at market prices, storage time-to-full, and the " +
-        "best single changes (e.g. 'add 1 basic factory', 'remove 1 head') with their ISK/day effect. Read-only.",
+        "best single changes (e.g. 'add 1 basic factory', 'remove 1 head') with their ISK/day effect, and for a layout that " +
+        "fits, a build sheet (what to place, schematics, routes, what to carry each visit). With `template`, also an EVE colony " +
+        "template to import in game (from_colony: a copy of that real colony, to rebuild it on another planet or character). Read-only.",
       inputSchema: {
         planet_type: z.string().optional().describe("Planet type, e.g. 'Ice'. Not needed with from_colony."),
         command_center_level: z.number().int().min(0).max(5).optional().describe("Command center level (default 5)."),
@@ -169,6 +172,9 @@ export function registerPiColonyCalcTool(server: McpServer, ctx: Ctx) {
           .describe(`P0/hour of a 10-head extractor at a reading of 100 on a one-day program (default ${DEFAULT_YIELD_AT_100}; pi_optimize calibrates this).`),
         program_hours: z.number().min(1).max(336).optional()
           .describe("Extractor program length in hours (default 24). Longer programs give less per hour (decay curve)."),
+        template: z.boolean().optional()
+          .describe("Add an importable EVE colony template (default false), as a second text block. Import in game: Planetary " +
+            "Industry view > Open template > Import & Export > Load from clipboard."),
         market: z.string().optional().describe("Market for prices (default 'jita')."),
         sell_fee_pct: z.number().min(0).max(30).optional().describe("Sales tax + broker fee (default 5)."),
         tax_rate_pct: z.number().min(0).max(100).optional().describe("Customs office tax rate (default 0)."),
@@ -183,6 +189,7 @@ export function registerPiColonyCalcTool(server: McpServer, ctx: Ctx) {
       let planetType: string | undefined = a.planet_type ? planetTypeRef(pi, a.planet_type) : undefined;
       let layout: Layout;
       let source: string;
+      let fromColony: { esi: any; planetId: number; ccLevel: number; name: string } | undefined;
       const notes: string[] = [];
 
       if (a.from_colony) {
@@ -198,6 +205,7 @@ export function registerPiColonyCalcTool(server: McpServer, ctx: Ctx) {
         const esi = await ctx.esi.get<any>(`/characters/${c.id}/planets/${col.planet_id}`, { character: c, scope: SCOPE });
         layout = fromEsi(sde, pi, col.planet_id, col.upgrade_level, esi, now);
         planetType = planetTypeRef(pi, col.planet_type);
+        fromColony = { esi, planetId: col.planet_id, ccLevel: col.upgrade_level, name: `${sde.planetName(col.planet_id)} (${c.name})` };
         source = `${c.name}'s colony on ${sde.planetName(col.planet_id)} (ESI, ${col.last_update ? `as of ${col.last_update}` : "time unknown"})`;
         if (layout.extractors.some((e) => !e.perHour)) notes.push("Extractors without a running program count as 0 output.");
       } else {
@@ -319,6 +327,24 @@ export function registerPiColonyCalcTool(server: McpServer, ctx: Ctx) {
       const exportM3 = [...ev.sim.leftover].filter(([t]) => pi.tier.get(t) !== 0).reduce((s, [t, v]) => s + v * (sde.type(t)?.volume ?? 0), 0);
       const cc = CC_LEVELS[Math.max(0, Math.min(layout.ccLevel, 5))];
 
+      let template: TemplateResult | undefined;
+      let templateName: string | undefined;
+      if (a.template) {
+        if (fromColony) {
+          const radius = sde.planetRadius(fromColony.planetId);
+          templateName = `Copy of ${fromColony.name}`;
+          template = templateFromEsi(sde, pi, fromColony.esi, {
+            planetType: planetType!, ccLevel: fromColony.ccLevel, name: templateName, diameterKm: radius ? (2 * radius) / 1000 : undefined,
+          });
+        } else if (!planetType) {
+          throw new UserError("A template needs the planet type: give planet_type, e.g. 'Barren'.");
+        } else {
+          const what = [...new Set([...layout.extractors.map((e) => e.resource), ...layout.factories.map((f) => f.product)].map((t) => sde.typeName(t)))];
+          templateName = `${planetType} - ${what.slice(-2).join(" + ")}`;
+          template = buildTemplate(sde, pi, { layout, planetType, name: templateName, programHours: a.program_hours });
+        }
+      }
+
       return reply({
         source,
         planet_type: planetType,
@@ -359,8 +385,22 @@ export function registerPiColonyCalcTool(server: McpServer, ctx: Ctx) {
         },
         storage: `${n0(capacity)} m³` + (pileM3 > 0 ? `, full in ~${n0(capacity / pileM3)} h if nothing is launched` : ""),
         suggestions,
+        setup: !a.from_colony && ev.fits
+          ? setupSteps(sde, pi, {
+            layout, programHours: a.program_hours,
+            local: layout.imports?.length ? layout.imports : undefined,
+          })
+          : undefined,
+        template: template
+          ? {
+            name: templateName, file: templateFileName(templateName!), structures: template.template.P.length,
+            links: `${template.links.count}` + (template.links.totalKm ? ` links, ${n0(template.links.totalKm)} km` : " links"),
+            note: "The template's JSON is the next text block. It places structures, links, routes and extractor head counts; " +
+              "drag the heads onto the hotspot and start the programs in game.",
+          }
+          : undefined,
         notes: notes.length ? notes : undefined,
-      });
+      }, { texts: template ? [JSON.stringify(template.template)] : [] });
     }),
   );
 }

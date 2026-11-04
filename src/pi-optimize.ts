@@ -78,8 +78,10 @@ export interface Colony {
   key: string;
   product?: number;
   factories?: number;
-  /** The colony's layout, for pi_colony_calc. */
+  /** The colony's layout, for pi_colony_calc and setup sheets. */
   layout?: Layout;
+  /** Factory colonies: inputs per hour taken from the plan's own colonies (the rest, `inputs`, is bought). */
+  local?: Flow[];
 }
 
 /** The P2 made from exactly these two P1, if any. */
@@ -451,7 +453,8 @@ export function optimizeOnce(
       outputs: [{ type: product, perHour: outPerHour }], inputs: bought, poolUse: local, haul,
       describe: `factory: ${n} x ${pi.factoryName.get(pi.tier.get(product)!)} making ${typeName(sde, product)} from ${parts} ` +
         `-> ${Math.round(outPerHour * 24).toLocaleString("en-US")}/day`,
-      key: String(product), product, factories: n,
+      key: String(product), product, factories: n, local,
+      layout: { ccLevel: lvl, extractors: [], storage: 1, launchpads: 1, factories: [{ product, count: n }] },
     };
   };
 
@@ -534,7 +537,7 @@ export function optimizeOnce(
   for (const col of factoriesByTier) {
     const again = factoryColony(col.product!, col.factories!, col.planet, col.ccLevel, false);
     if (!again) continue;
-    Object.assign(col, { iskPerHour: again.iskPerHour, capitalPerHour: again.capitalPerHour, inputs: again.inputs, describe: again.describe });
+    Object.assign(col, { iskPerHour: again.iskPerHour, capitalPerHour: again.capitalPerHour, inputs: again.inputs, local: again.local, describe: again.describe });
     for (const f of again.poolUse) {
       pool.set(f.type, (pool.get(f.type) ?? 0) - f.perHour * 24);
       haulOut -= vol(f.type) * f.perHour * 24;
