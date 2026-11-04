@@ -531,6 +531,30 @@ export class Sde {
     return ((this.q("SELECT system_id FROM planets WHERE id = ?").get(id) as any)?.system_id) ?? null;
   }
 
+  /** Planets of a system in orbit order, with their numeral name ("J123456 IV"). */
+  planetsInSystem(systemId: number): Array<{ id: number; name: string; type_id: number; celestial_index: number }> {
+    const sys = this.system(systemId);
+    return (this.q("SELECT id, type_id, celestial_index FROM planets WHERE system_id = ? ORDER BY celestial_index").all(systemId) as any[])
+      .map((p) => ({ ...p, name: `${sys?.name ?? systemId} ${romanNumeral(p.celestial_index)}` }));
+  }
+
+  /** Published type ids in any of the given groups. */
+  typeIdsInGroups(groupIds: number[]): number[] {
+    if (!groupIds.length) return [];
+    return (this.q(`SELECT id FROM types WHERE published = 1 AND group_id IN (${groupIds.map(() => "?").join(",")})`)
+      .all(...groupIds) as any[]).map((r) => r.id);
+  }
+
+  /** Every planetary interaction schematic (P0->P1 ... P3->P4). Empty on an index built before schema 5. */
+  piSchematics(): Array<{ id: number; name: string; cycle_time: number; output_type_id: number; output_qty: number; inputs: Array<[number, number]> }> {
+    return (this.q("SELECT * FROM pi_schematics").all() as any[]).map((r) => ({ ...r, inputs: JSON.parse(r.inputs) }));
+  }
+
+  /** All blueprints with their activities (parsed), for "where is this used" scans. */
+  allBlueprints(): Array<{ id: number; activities: any }> {
+    return (this.q("SELECT id, data FROM blueprints").all() as any[]).map((r) => ({ id: r.id, activities: JSON.parse(r.data) }));
+  }
+
   npcCorporationName(id: number): string | null {
     return ((this.q("SELECT name FROM npc_corporations WHERE id = ?").get(id) as any)?.name) ?? null;
   }
