@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Ctx } from "../context.js";
 import type { Sde } from "../sde/db.js";
 import { PI_ATTR, piData, planetTypeRef, tierName, type PiData } from "../pi.js";
-import { extractorProgram } from "../pi-colony.js";
+import { extractorProgram, programCycleSeconds, programFactor } from "../pi-colony.js";
 import {
   CC_LEVELS, COMMAND_CENTER_M3, LAUNCHPAD_M3, LINK_RESERVE, MAX_HEADS, STORAGE_M3, layoutCapacity, layoutCost, pinCosts, simulate,
   type Layout, type PinCosts, type Simulation,
@@ -148,8 +148,8 @@ export function registerPiColonyCalcTool(server: McpServer, ctx: Ctx) {
           heads: z.number().int().min(1).max(10).optional().describe("Extractor heads (default 10)."),
           reading: z.number().min(0).max(100).optional().describe("Scan reading 0-100 at the heads."),
           qty_per_cycle: z.number().min(1).optional().describe("Real qty_per_cycle (from the planets tool or the game)."),
-          cycle_minutes: z.number().min(1).optional().describe("Cycle length with qty_per_cycle (default 15)."),
-          program_hours: z.number().min(1).max(336).optional().describe("Program length with qty_per_cycle (default 24)."),
+          cycle_minutes: z.number().min(1).optional().describe("Cycle length with qty_per_cycle (default: from the program length, 15 for one day)."),
+          program_hours: z.number().min(1).max(336).optional().describe("Program length for this extractor (default: the top-level program_hours)."),
           p0_per_hour: z.number().min(0).optional().describe("Output per hour, if you already know it."),
         })).max(6).optional(),
         factories: z.array(z.object({
@@ -166,7 +166,9 @@ export function registerPiColonyCalcTool(server: McpServer, ctx: Ctx) {
         from_colony: z.object({ planet: z.string().describe("Planet name, e.g. 'J163701 VII'."), character: characterParam })
           .optional().describe("Check a real colony: reads its layout from ESI instead of the layout arguments."),
         p0_per_hour_at_100: z.number().min(100).max(200000).optional()
-          .describe(`P0/hour of a 10-head extractor at a reading of 100 (default ${DEFAULT_YIELD_AT_100}; pi_optimize calibrates this).`),
+          .describe(`P0/hour of a 10-head extractor at a reading of 100 on a one-day program (default ${DEFAULT_YIELD_AT_100}; pi_optimize calibrates this).`),
+        program_hours: z.number().min(1).max(336).optional()
+          .describe("Extractor program length in hours (default 24). Longer programs give less per hour (decay curve)."),
         market: z.string().optional().describe("Market for prices (default 'jita')."),
         sell_fee_pct: z.number().min(0).max(30).optional().describe("Sales tax + broker fee (default 5)."),
         tax_rate_pct: z.number().min(0).max(100).optional().describe("Customs office tax rate (default 0)."),
@@ -207,12 +209,13 @@ export function registerPiColonyCalcTool(server: McpServer, ctx: Ctx) {
             throw new UserError(`${planetType} planets have no ${sde.typeName(resource)}. They have: ${[...pi.p0Planets].filter(([, t]) => t.has(planetType!)).map(([r]) => sde.typeName(r)).join(", ")}.`);
           }
           const heads = e.heads ?? MAX_HEADS;
+          const hours = e.program_hours ?? a.program_hours ?? 24;
           let perHour: number;
           if (e.p0_per_hour != null) perHour = e.p0_per_hour;
           else if (e.qty_per_cycle != null) {
-            const cycle = (e.cycle_minutes ?? 15) * 60;
-            perHour = extractorProgram(e.qty_per_cycle, cycle, 0, (e.program_hours ?? 24) * 3_600_000, 0).avgPerHour;
-          } else if (e.reading != null) perHour = yAt100 * (e.reading / 100) * (heads / MAX_HEADS);
+            const cycle = e.cycle_minutes != null ? e.cycle_minutes * 60 : programCycleSeconds(hours);
+            perHour = extractorProgram(e.qty_per_cycle, cycle, 0, hours * 3_600_000, 0).avgPerHour;
+          } else if (e.reading != null) perHour = yAt100 * programFactor(hours) * (e.reading / 100) * (heads / MAX_HEADS);
           else throw new UserError(`Extractor on ${sde.typeName(resource)}: give a scan reading, qty_per_cycle or p0_per_hour.`);
           return { resource, heads, perHour };
         });
@@ -235,7 +238,10 @@ export function registerPiColonyCalcTool(server: McpServer, ctx: Ctx) {
         };
         source = "layout given";
         if (a.extractors?.some((e) => e.reading != null && e.qty_per_cycle == null && e.p0_per_hour == null)) {
-          notes.push(`Output from scan readings uses ${n0(yAt100)} P0/h per 10 heads at a reading of 100 (an estimate; pi_optimize calibrates it).`);
+          const hours = a.program_hours ?? 24;
+          notes.push(`Output from scan readings uses ${n0(yAt100)} P0/h per 10 heads at a reading of 100 on a one-day program` +
+            (hours !== 24 ? `, ${Math.round(programFactor(hours) * 100)}% of that per hour on ${hours}-hour programs` : "") +
+            " (an estimate; pi_optimize calibrates it).");
         }
       }
 

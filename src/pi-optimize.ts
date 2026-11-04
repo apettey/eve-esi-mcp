@@ -1,5 +1,6 @@
 import type { Sde } from "./sde/db.js";
 import { PI_ATTR, perHour, tierName, type PiData } from "./pi.js";
+import { programCycleSeconds, programFactor } from "./pi-colony.js";
 import {
   BASIC_P0_PER_HOUR, LAUNCHPAD_M3, MAX_HEADS, STORAGE_M3, layoutFits, simulate, type Flow, type Layout, type PinCosts,
 } from "./pi-layout.js";
@@ -33,11 +34,15 @@ export interface Slot {
   character: string;
   slots: number;
   ccLevel: number;
+  /** Extractor program length this character runs, in hours (default: params.programHours). */
+  programHours?: number;
 }
 
 export interface OptimizeParams {
-  /** P0 per hour one 10-head extractor gives on a resource that scans 100. */
+  /** P0 per hour one 10-head extractor gives on a resource that scans 100, on a one-day program. */
   yieldAtFull: number;
+  /** Extractor program length in hours (default 24). Longer programs give less per hour and must store more. */
+  programHours?: number;
   /** Customs office tax, 0-1. */
   taxRate: number;
   /** Fees when selling (sales tax + broker), 0-1. */
@@ -101,7 +106,21 @@ interface Ctx {
   params: OptimizeParams;
 }
 
-const taxBase = (c: Ctx, type: number) => c.sde.attr(type, PI_ATTR.exportTaxBase) ?? 0;
+/** Static lookups the greedy loop makes thousands of times, cached per SDE. */
+const lookups = new WeakMap<Sde, { tax: Map<number, number>; vol: Map<number, number>; name: Map<number, string> }>();
+function cached(sde: Sde) {
+  let l = lookups.get(sde);
+  if (!l) lookups.set(sde, (l = { tax: new Map(), vol: new Map(), name: new Map() }));
+  return l;
+}
+const memo = <V>(m: Map<number, V>, k: number, f: () => V) => {
+  let v = m.get(k);
+  if (v === undefined) m.set(k, (v = f()));
+  return v;
+};
+const taxBase = (c: Ctx, type: number) => memo(cached(c.sde).tax, type, () => c.sde.attr(type, PI_ATTR.exportTaxBase) ?? 0);
+const volume = (sde: Sde, type: number) => memo(cached(sde).vol, type, () => sde.type(type)?.volume ?? 0);
+const typeName = (sde: Sde, type: number) => memo(cached(sde).name, type, () => sde.typeName(type));
 const saleValue = (c: Ctx, type: number, perHour: number) => {
   const p = c.prices.get(type)?.sell;
   if (!p) return null;
@@ -114,8 +133,11 @@ const saleValue = (c: Ctx, type: number, perHour: number) => {
  * many basic factories as still fit. Unprocessed P0 is exported raw only when asked (otherwise it piles up). Output
  * is sold as P1 or combined into P2, whichever pays more. Costs and production come from the shared layout model.
  */
-export function extractionColony(c: Ctx, planet: PlanetInput, r1: number, r2: number, ccLevel: number): Colony | null {
+export function extractionColony(
+  c: Ctx, planet: PlanetInput, r1: number, r2: number, ccLevel: number, programHours = c.params.programHours ?? 24,
+): Colony | null {
   const { costs, pi, params } = c;
+  const factor = programFactor(programHours);
   const p1a = p1From(pi, r1);
   const p1b = p1From(pi, r2);
   if (!p1a || !p1b) return null;
@@ -124,13 +146,14 @@ export function extractionColony(c: Ctx, planet: PlanetInput, r1: number, r2: nu
   let best: Colony | null = null;
   let bestHeads = Infinity;
   for (let heads = MAX_HEADS; heads >= 1; heads--) {
-    const extractors = [r1, r2].map((r) => ({ resource: r, heads, perHour: params.yieldAtFull * (ab(r) / 100) * (heads / MAX_HEADS) }));
+    const extractors = [r1, r2].map((r) => ({ resource: r, heads, perHour: params.yieldAtFull * factor * (ab(r) / 100) * (heads / MAX_HEADS) }));
     const rate = new Map<number, number>();
     for (const e of extractors) rate.set(e.resource, (rate.get(e.resource) ?? 0) + e.perHour);
     const need = new Map([...rate].map(([r, v]) => [r, Math.max(1, Math.ceil(v / BASIC_P0_PER_HOUR - 1e-9))]));
     for (let adv = 0; adv <= (p2 ? 4 : 0); adv++) {
+      let storage = 0;
       const layout = (alloc: Map<number, number>): Layout => ({
-        ccLevel, extractors, storage: 0, launchpads: 1,
+        ccLevel, extractors, storage, launchpads: 1,
         factories: [
           ...[...alloc].map(([r, n]) => ({ product: p1From(pi, r)!, count: n })),
           ...(adv ? [{ product: p2!, count: adv }] : []),
@@ -146,8 +169,16 @@ export function extractionColony(c: Ctx, planet: PlanetInput, r1: number, r2: nu
         alloc.set(next[0], alloc.get(next[0])! + 1);
         if (!layoutFits(costs, pi, layout(alloc))) { alloc.set(next[0], alloc.get(next[0])! - 1); break; }
       }
-      const l = layout(alloc);
-      const sim = simulate(pi, l);
+      let l = layout(alloc);
+      let sim = simulate(pi, l);
+      // Everything the colony makes between visits (one program) waits on the launchpad and in storage.
+      const held = [...sim.leftover].reduce((m, [t, r]) => m + r * (c.sde.type(t)?.volume ?? 0), 0) * programHours;
+      if (held > LAUNCHPAD_M3) {
+        storage = Math.ceil((held - LAUNCHPAD_M3) / STORAGE_M3);
+        l = layout(alloc);
+        if (!layoutFits(costs, pi, l)) continue;
+        sim = simulate(pi, l);
+      }
       const outputs: Flow[] = [];
       const unprocessed: Flow[] = [];
       for (const [type, perHour] of sim.leftover) {
@@ -164,7 +195,8 @@ export function extractionColony(c: Ctx, planet: PlanetInput, r1: number, r2: nu
       const colony: Colony = {
         kind: "extraction", planet, ccLevel, iskPerHour: isk, capitalPerHour: 0, outputs, inputs: [],
         key: [r1, r2].sort().join("+"),
-        describe: `extract ${res}, ${heads} heads per extractor, ${basics} basic${adv ? ` + ${adv} advanced` : ""} -> ` +
+        describe: `extract ${res}, ${heads} heads per extractor, ${programLabel(programHours)} programs, ` +
+          `${basics} basic${adv ? ` + ${adv} advanced` : ""}${storage ? ` + ${storage} storage` : ""} -> ` +
           outputs.map((o) => `${fmt(o)} (${tierName(pi.tier.get(o.type))})`).join(", ") +
           (unprocessed.length ? ` (${unprocessed.map(fmt).join(", ")} unprocessed)` : ""),
         layout: l,
@@ -177,6 +209,13 @@ export function extractionColony(c: Ctx, planet: PlanetInput, r1: number, r2: nu
     }
   }
   return best;
+}
+
+/** "1-day" / "12-hour" with the cycle length, for colony descriptions. */
+export function programLabel(hours: number): string {
+  const len = hours % 24 === 0 ? `${hours / 24}-day` : `${hours}-hour`;
+  const cyc = programCycleSeconds(hours) / 60;
+  return `${len} (${cyc >= 60 ? `${cyc / 60} h` : `${cyc} min`} cycles)`;
 }
 
 /** How many factories of a product fit a command center next to a launchpad and one storage facility. */
@@ -217,48 +256,107 @@ export interface Plan {
   bestByPlanet: Map<string, Colony[]>;
   factoryMargins: Array<{ product: number; iskPerHour: number }>;
   warnings: string[];
+  /** What the local search changed, when it improved on the greedy plan. */
+  search?: string;
 }
 
-/** Greedy plan: repeatedly give the most valuable remaining colony to a character with a free slot on that planet. */
-/**
- * Plans with two greedy orders and keeps the better total: by ISK/day, and by ISK/day per share of the scarce budgets
- * (haul m3 and input ISK). The first wins when budgets are loose; the second when one big colony would use up the haul
- * or input budget that many smaller colonies could have used better.
- */
-export function optimize(
-  sde: Sde, pi: PiData, costs: PinCosts, prices: Map<number, Price>, planets: PlanetInput[], slots: Slot[], params: OptimizeParams,
-): Plan {
-  const plans = (["value", "density"] as const).map((mode) => optimizeOnce(sde, pi, costs, prices, planets, slots, params, mode));
-  const total = (p: Plan) => p.assignments.flatMap((a) => a.colonies).reduce((s, c) => s + c.iskPerHour, 0);
-  return total(plans[1]) > total(plans[0]) * 1.001 ? plans[1] : plans[0];
+/** Extraction candidates per (CC level, program length), computed once and shared by every greedy run. */
+export interface Prep {
+  extraction: Map<string, Colony[]>;
+  bestByPlanet: Map<string, Colony[]>;
+  /** factoriesThatFit by "product|ccLevel". */
+  fit: Map<string, number>;
 }
 
-export function optimizeOnce(
-  sde: Sde, pi: PiData, costs: PinCosts, prices: Map<number, Price>, planets: PlanetInput[], slots: Slot[], params: OptimizeParams,
-  mode: "value" | "density",
-): Plan {
+const hoursOf = (s: Slot, params: OptimizeParams) => s.programHours ?? params.programHours ?? 24;
+const variantOf = (s: Slot, params: OptimizeParams) => `${Math.min(s.ccLevel, 5)}|${hoursOf(s, params)}`;
+
+export function prepare(sde: Sde, pi: PiData, costs: PinCosts, prices: Map<number, Price>, planets: PlanetInput[], slots: Slot[], params: OptimizeParams): Prep {
   const c: Ctx = { sde, pi, costs, prices, params };
-  const warnings: string[] = [];
-  const levels = [...new Set(slots.map((s) => Math.min(s.ccLevel, 5)))];
-
-  // Extraction candidates per planet and CC level.
-  const extraction = new Map<number, Colony[]>(); // ccLevel -> colonies
+  const variants = new Map(slots.map((s) => [variantOf(s, params), { lvl: Math.min(s.ccLevel, 5), hours: hoursOf(s, params) }]));
+  const extraction = new Map<string, Colony[]>();
   const bestByPlanet = new Map<string, Colony[]>();
-  for (const lvl of levels) {
+  let bestVariant: string | null = null;
+  for (const [key, v] of variants) {
     const list: Colony[] = [];
     for (const planet of planets) {
       const res = [...planet.abundance.keys()];
       for (let i = 0; i < res.length; i++) for (let j = i; j < res.length; j++) {
-        const col = extractionColony(c, planet, res[i], res[j], lvl);
+        const col = extractionColony(c, planet, res[i], res[j], v.lvl, v.hours);
         if (col && col.iskPerHour > 0) list.push(col);
       }
     }
     list.sort((a, b) => b.iskPerHour - a.iskPerHour);
-    extraction.set(lvl, list);
-    if (lvl === Math.max(...levels)) {
-      for (const planet of planets) bestByPlanet.set(planet.name, list.filter((x) => x.planet.id === planet.id).slice(0, 3));
+    extraction.set(key, list);
+    const cur = bestVariant ? variants.get(bestVariant)! : null;
+    if (!cur || v.lvl > cur.lvl || (v.lvl === cur.lvl && v.hours < cur.hours)) bestVariant = key;
+  }
+  for (const planet of planets) {
+    bestByPlanet.set(planet.name, (extraction.get(bestVariant!) ?? []).filter((x) => x.planet.id === planet.id).slice(0, 3));
+  }
+  return { extraction, bestByPlanet, fit: new Map() };
+}
+
+/** Identifies a colony choice for the local search: a resource pair on a planet, or a factory product. */
+export const choiceId = (col: Colony) => (col.kind === "extraction" ? `x:${col.planet.id}:${col.key}` : `f:${col.product}`);
+
+export const planTotal = (p: Plan) => p.assignments.flatMap((a) => a.colonies).reduce((s, c) => s + c.iskPerHour, 0);
+
+/**
+ * Plans with two greedy orders and keeps the better total: by ISK/day, and by ISK/day per share of the scarce budgets
+ * (haul m3 and input ISK). The first wins when budgets are loose; the second when one big colony would use up the haul
+ * or input budget that many smaller colonies could have used better. Then a local search: drop one chosen colony
+ * (ban that choice) and re-plan; keep the result when the total improves, until no single ban helps.
+ */
+export function optimize(
+  sde: Sde, pi: PiData, costs: PinCosts, prices: Map<number, Price>, planets: PlanetInput[], slots: Slot[], params: OptimizeParams,
+  opts: { maxReplans?: number } = {},
+): Plan {
+  const prep = prepare(sde, pi, costs, prices, planets, slots, params);
+  const run = (mode: "value" | "density", banned: Set<string>) => optimizeOnce(sde, pi, costs, prices, planets, slots, params, mode, prep, banned);
+  const starts = (["value", "density"] as const).map((mode) => ({ mode, plan: run(mode, new Set()) }));
+  let best = planTotal(starts[1].plan) > planTotal(starts[0].plan) * 1.001 ? starts[1] : starts[0];
+  let banned = new Set<string>();
+  let budget = opts.maxReplans ?? 80;
+  const start = planTotal(best.plan);
+  for (let improved = true; improved && budget > 0;) {
+    improved = false;
+    const ids = [...new Set(best.plan.assignments.flatMap((a) => a.colonies).map(choiceId))].filter((id) => !banned.has(id));
+    for (const id of ids) {
+      if (budget-- <= 0) break;
+      const tryBans = new Set([...banned, id]);
+      const plan = run(best.mode, tryBans);
+      if (planTotal(plan) > planTotal(best.plan) * 1.002) {
+        best = { mode: best.mode, plan };
+        banned = tryBans;
+        improved = true;
+        break;
+      }
     }
   }
+  const gain = planTotal(best.plan) - start;
+  if (gain > 0) {
+    best.plan.search = `local search added ${Math.round((gain / Math.max(1, start)) * 100)}% by leaving out ` +
+      [...banned].map((b) => describeChoice(sde, planets, b)).join(", ");
+  }
+  return best.plan;
+}
+
+function describeChoice(sde: Sde, planets: PlanetInput[], id: string): string {
+  const [kind, a, b] = id.split(":");
+  if (kind === "f") return `${sde.typeName(Number(a))} factories`;
+  const planet = planets.find((p) => p.id === Number(a));
+  return `${b.split("+").map((r) => sde.typeName(Number(r))).join(" + ")} on ${planet?.name ?? a}`;
+}
+
+export function optimizeOnce(
+  sde: Sde, pi: PiData, costs: PinCosts, prices: Map<number, Price>, planets: PlanetInput[], slots: Slot[], params: OptimizeParams,
+  mode: "value" | "density", prep = prepare(sde, pi, costs, prices, planets, slots, params), banned: Set<string> = new Set(),
+): Plan {
+  const c: Ctx = { sde, pi, costs, prices, params };
+  const warnings: string[] = [];
+  const { extraction, bestByPlanet } = prep;
+  const variant = (s: Slot) => variantOf(s, params);
 
   // Factory candidates: every P2-P4 product with prices. Margins from bought inputs are reported; the greedy loop
   // re-prices each candidate with whatever the plan's own colonies already produce.
@@ -276,7 +374,7 @@ export function optimizeOnce(
   }
   const highTechPlanets = planets.filter((p) => pi.highTech.has(p.type));
 
-  const vol = (type: number) => sde.type(type)?.volume ?? 0;
+  const vol = (type: number) => volume(sde, type);
   const m3 = (flows: Flow[]) => flows.reduce((s, f) => s + vol(f.type) * f.perHour * 24, 0);
   let capitalLeft = params.maxCapitalPerDay;
   let haulLeft = params.maxHaulPerDay;
@@ -343,7 +441,7 @@ export function optimizeOnce(
       if (storeM3 > LAUNCHPAD_M3 + STORAGE_M3) return null;
       if (capital * 24 > capitalLeft || haul > haulLeft) return null;
     }
-    const fmt = (f: Flow) => `${sde.typeName(f.type)} ${Math.round(f.perHour * 24).toLocaleString("en-US")}/day`;
+    const fmt = (f: Flow) => `${typeName(sde, f.type)} ${Math.round(f.perHour * 24).toLocaleString("en-US")}/day`;
     const parts = [
       local.length ? `your colonies' ${local.map(fmt).join(", ")}` : "",
       bought.length ? `bought ${bought.map(fmt).join(", ")}` : "",
@@ -351,7 +449,7 @@ export function optimizeOnce(
     return {
       kind: "factory", planet, ccLevel: lvl, iskPerHour: isk, capitalPerHour: capital,
       outputs: [{ type: product, perHour: outPerHour }], inputs: bought, poolUse: local, haul,
-      describe: `factory: ${n} x ${pi.factoryName.get(pi.tier.get(product)!)} making ${sde.typeName(product)} from ${parts} ` +
+      describe: `factory: ${n} x ${pi.factoryName.get(pi.tier.get(product)!)} making ${typeName(sde, product)} from ${parts} ` +
         `-> ${Math.round(outPerHour * 24).toLocaleString("en-US")}/day`,
       key: String(product), product, factories: n,
     };
@@ -369,19 +467,22 @@ export function optimizeOnce(
       if (!free.get(slot.character)) continue;
       const mine = onPlanet.get(slot.character)!;
       const lvl = Math.min(slot.ccLevel, 5);
-      for (const ex of extraction.get(lvl) ?? []) {
+      for (const ex of extraction.get(variant(slot)) ?? []) {
         if (mine.has(ex.planet.id) || m3(ex.outputs) > haulLeft) continue;
         if ((extractorsOn.get(ex.planet.id) ?? 0) >= params.maxCharactersPerPlanet) continue;
         // The same resources twice on one planet would compete for the same deposits.
-        if (taken.has(`${ex.planet.id}:${ex.key}`)) continue;
+        if (taken.has(`${ex.planet.id}:${ex.key}`) || banned.has(choiceId(ex))) continue;
         const sc = score(ex);
         if (!pick || sc > pick.score) pick = { slot, colony: ex, score: sc };
       }
       for (const product of products) {
+        if (banned.has(`f:${product}`)) continue;
         const where = (pi.tier.get(product) === 4 ? highTechPlanets : planets).find((p) => !mine.has(p.id));
         if (!where) continue;
         // Try every factory count that fits the command center; keep the most valuable.
-        for (let n = factoriesThatFit(c, product, lvl); n >= 1; n--) {
+        const fk = `${product}|${lvl}`;
+        if (!prep.fit.has(fk)) prep.fit.set(fk, factoriesThatFit(c, product, lvl));
+        for (let n = prep.fit.get(fk)!; n >= 1; n--) {
           const col = factoryColony(product, n, where, lvl);
           if (!col || col.iskPerHour <= 0) continue;
           const sc = score(col);

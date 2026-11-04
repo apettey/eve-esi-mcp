@@ -4,8 +4,8 @@ import type { Ctx } from "../context.js";
 import type { StoredCharacter } from "../auth/store.js";
 import type { Sde } from "../sde/db.js";
 import { piData, tierName, type PiData } from "../pi.js";
-import { analyzeColony, yieldAt100 } from "../pi-colony.js";
-import { optimize, pinCosts, type PlanetInput, type Price, type Slot } from "../pi-optimize.js";
+import { analyzeColony, programFactor, yieldAt100 } from "../pi-colony.js";
+import { optimize, pinCosts, programLabel, type PlanetInput, type Price, type Slot } from "../pi-optimize.js";
 import { marketSummary, resolveMarketScope } from "../market.js";
 import { UserError, isk, mapLimit } from "../util.js";
 import { READ_ONLY, characterParam, handler, reply } from "./helpers.js";
@@ -67,7 +67,8 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
         "colony (P2/P3/P4 from inputs bought at the market, sized to the command center and to market volume), maximising ISK/day " +
         "at current prices after sales fees and customs tax. Returns the plan per character, totals (ISK/day, input purchases, " +
         "haul m³), the best options per planet, the best factory margins and warnings. Extraction yields are estimated from the " +
-        "scan readings (the assumption is shown); once extractors run, the planets tool shows real output. Read-only.",
+        "scan readings (the assumption is shown) for the program length you run (program_hours, per character with " +
+        "program_hours_by_character); once extractors run, the planets tool shows real output. Read-only.",
       inputSchema: {
         system: z.string().optional().describe("System name or id. Default: the character's current system."),
         character: characterParam,
@@ -96,6 +97,10 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
           .describe("m³ per day you can haul in and out of the system combined (default 15,000, about one 100k m³ trip a week)."),
         export_raw_p0: z.boolean().optional()
           .describe("Haul and sell raw P0 the basic factories can't process (default false: it is left on the planet)."),
+        program_hours: z.number().min(1).max(336).optional()
+          .describe("Extractor program length in hours (default 24). Longer programs need fewer logins but give less per hour."),
+        program_hours_by_character: z.record(z.string(), z.number().min(1).max(336)).optional()
+          .describe('Program length per character where it differs, e.g. {"My Alt": 96} for an alt logged in every 4 days.'),
         restock_days: z.number().min(0.25).max(30).optional()
           .describe("Days between visits to restock a factory colony (default 2). Inputs for that long must fit its launchpad and storage."),
       },
@@ -148,6 +153,11 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
         const n = a.ignore_existing_colonies ? ci.max_colonies : ci.free_slots ?? 0;
         if (n > 0) slots.push({ character: ci.character, slots: n, ccLevel: ci.max_command_center_level });
       }
+      for (const [ref, hours] of Object.entries(a.program_hours_by_character ?? {})) {
+        const name = ctx.character(ref).name;
+        const slot = slots.find((s) => s.character === name);
+        if (slot) slot.programHours = hours;
+      }
       if (!slots.length) {
         throw new UserError(
           "No character has a free colony slot and PI skills. Try ignore_existing_colonies, or train Interplanetary Consolidation and Command Center Upgrades.",
@@ -184,6 +194,7 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
         maxHaulPerDay: a.max_haul_m3_per_day ?? 15_000,
         restockDays: a.restock_days ?? 2,
         exportRawP0: a.export_raw_p0 ?? false,
+        programHours: a.program_hours ?? 24,
       };
       const plan = optimize(sde, pi, pinCosts(sde), prices, planets, slots, params);
 
@@ -195,7 +206,7 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
       if (all.some((x) => x.kind === "extraction")) {
         warnings.push(
           cal?.value
-            ? "Extraction yields are calibrated from your extractors here; longer programs than theirs yield less per hour."
+            ? "Extraction yields are calibrated from your extractors here, converted from their program lengths to the plan's."
             : "Extraction yields are estimates from scan readings. Once extractors run here, rerun with the same readings and " +
               "the tool calibrates itself from them.",
         );
@@ -217,7 +228,12 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
         system: sde.systemSummary(systemId),
         market: scope.label,
         assumptions: {
-          p0_per_hour_at_100: `${Math.round(params.yieldAtFull).toLocaleString("en-US")} (${yieldNote})`,
+          p0_per_hour_at_100: `${Math.round(params.yieldAtFull).toLocaleString("en-US")} on a one-day program (${yieldNote})`,
+          extractor_programs: [...new Set([params.programHours, ...slots.map((s) => s.programHours ?? params.programHours)])].map((h) =>
+            `${programLabel(h)}: ${Math.round(programFactor(h) * 100)}% of one-day output per hour` +
+            (slots.some((s) => s.programHours === h) ? ` (${slots.filter((s) => s.programHours === h).map((s) => s.character).join(", ")})` : "")),
+          program_trade_off: [24, 48, 96, 168, 336].map((h) => `${h / 24}d ${Math.round(programFactor(h) * 100)}%`).join(", ") +
+            " of one-day output per hour (decay curve; unverified beyond one day)",
           customs_tax: `${a.tax_rate_pct ?? 0}%`,
           sell_fees: `${a.sell_fee_pct ?? 5}%`,
           prices: "lowest sell order, for outputs and for bought inputs",
@@ -250,6 +266,7 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
           : undefined,
         unused_slots: plan.unused.length ? plan.unused.map((u) => `${u.character}: ${u.slots}`) : undefined,
         unused_slots_reason: plan.unusedReason,
+        search: plan.search,
         best_options_by_planet: Object.fromEntries([...plan.bestByPlanet].map(([name, cols]) => [
           name, cols.map((c) => `${day(c.iskPerHour)}/day: ${c.describe}`),
         ])),

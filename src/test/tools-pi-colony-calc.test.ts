@@ -92,6 +92,16 @@ withSde("pi_colony_calc suggests the best addition that still fits", async () =>
   assert.match(r.json.suggestions[0], /^add 1 Basic Industry Facility \(Toxic Metals\): \+.* ISK\/day \(still fits\)$/);
 });
 
+withSde("pi_colony_calc lowers scan-based output for longer programs", async () => {
+  const args = { planet_type: "Lava", extractors: [{ resource: "Heavy Metals", heads: 6, reading: 40 }], factories: [{ product: "Toxic Metals", count: 1 }] };
+  const day = await callTool(calcCtx(), "pi_colony_calc", args);
+  const week = await callTool(calcCtx(), "pi_colony_calc", { ...args, program_hours: 168 });
+  assert.equal(week.isError, false, week.text);
+  const rate = (r: any) => Number(/([\d,]+)\/h/.exec(r.json.structures.find((s: string) => s.startsWith("Extractor 1")))![1].replace(/,/g, ""));
+  assert.ok(rate(week) < rate(day) * 0.7, `${rate(week)} vs ${rate(day)}`);
+  assert.ok(week.json.notes.some((n: string) => /% of that per hour on 168-hour programs/.test(n)), week.json.notes.join(" | "));
+});
+
 withSde("pi_colony_calc rejects resources and products the planet can't have", async () => {
   const wrong = await callTool(calcCtx(), "pi_colony_calc", { planet_type: "Gas", extractors: [{ resource: "Heavy Metals", reading: 50 }] });
   assert.equal(wrong.isError, true);

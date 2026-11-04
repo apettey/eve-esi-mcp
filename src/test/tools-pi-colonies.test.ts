@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { STANDARD_SCOPES } from "../auth/scopes.js";
 import { piData } from "../pi.js";
-import { analyzeColony, cycleOutput, extractorProgram, yieldAt100 } from "../pi-colony.js";
+import { analyzeColony, cycleOutput, extractorProgram, programCycleSeconds, programFactor, yieldAt100 } from "../pi-colony.js";
 import { callTool, character, sde, testCtx, withSde } from "./harness.js";
 
 const H = 3_600_000;
@@ -27,6 +27,26 @@ test("extractor output decays over the program and stops at expiry", () => {
   assert.equal(extractorProgram(10_000, 900, now - 48 * H, now - 24 * H, now).nowPerHour, 0, "an expired program makes nothing");
 });
 
+test("program length sets the cycle and lowers output per hour", () => {
+  assert.equal(programCycleSeconds(1), 900);
+  assert.equal(programCycleSeconds(24), 900, "observed: one-day programs run 15-minute cycles");
+  assert.equal(programCycleSeconds(48), 1800);
+  assert.equal(programCycleSeconds(96), 3600);
+  assert.equal(programCycleSeconds(336), 14400);
+  assert.equal(programFactor(24), 1);
+  assert.ok(programFactor(12) > 1, "shorter than a day: more per hour");
+  let last = 1;
+  for (const h of [48, 96, 168, 336]) {
+    const f = programFactor(h);
+    assert.ok(f < last, `${h} h: ${f}`);
+    last = f;
+  }
+  // The factor matches the full curve (noise included) to within a few percent.
+  const day = extractorProgram(10_000, 900, 0, 24 * H, 0).avgPerHour;
+  const four = extractorProgram(10_000, 3600, 0, 96 * H, 0).avgPerHour;
+  assert.ok(Math.abs(four / day - programFactor(96)) < 0.1, `${four / day} vs ${programFactor(96)}`);
+});
+
 // ---------------------------------------------------------------------------------------------------------------
 // Colony analysis from an ESI layout
 
@@ -35,8 +55,16 @@ function layout(now: number) {
   const sch = (product: string) => pi.schematic.get(id(product))!.id;
   const g = (group: number) => sde!.typeIdsInGroups([group])[0];
   const heads = (n: number) => Array.from({ length: n }, (_, i) => ({ head_id: i, latitude: 0, longitude: 0 }));
+  const route = (route_id: number, source_pin_id: number, destination_pin_id: number, type: string, quantity: number) =>
+    ({ route_id, source_pin_id, destination_pin_id, content_type_id: id(type), quantity });
   return {
-    links: [], routes: [],
+    links: [],
+    routes: [
+      route(1, 2, 1, "Aqueous Liquids", 3_000), // extractor -> launchpad
+      route(2, 1, 3, "Aqueous Liquids", 3_000), // launchpad -> Water factory
+      route(3, 3, 1, "Water", 20), // Water -> launchpad
+      route(4, 1, 4, "Water", 40), // launchpad -> Coolant (nothing brings Electrolytes)
+    ],
     pins: [
       { pin_id: 1, type_id: g(1030), latitude: 0, longitude: 0, contents: [{ type_id: id("Water"), amount: 10_000 }] }, // launchpad: 1,900 m3
       {
@@ -61,10 +89,43 @@ withSde("analyzeColony reads extractors, factories, shortfalls and storage", () 
   assert.equal(a.idleFactories.get(id("Coolant")), 1, "a factory with no cycle for a day is idle");
   assert.equal(a.idleFactories.get(id("Water")), undefined);
   assert.ok(a.shortfalls.some((s) => s.type === id("Electrolytes") && s.have === 0));
+  assert.deepEqual(a.unroutedInputs, [{ product: id("Coolant"), input: id("Electrolytes"), factories: 1 }]);
+  assert.deepEqual(a.unroutedOutputs, [{ type: id("Coolant"), from: "factory", pins: 1 }]);
   assert.equal(a.capacityM3, 10_000);
   assert.ok(Math.abs(a.storedM3 - 1900) < 1);
   const y = yieldAt100(a.extractors[0], 50)!;
-  assert.ok(Math.abs(y - a.extractors[0].program!.avgPerHour * (10 / 8) * 2) < 1e-6, "scaled to 10 heads and a reading of 100");
+  assert.ok(Math.abs(y - (a.extractors[0].program!.avgPerHour * (10 / 8) * 2) / programFactor(5)) < 1e-6,
+    "scaled to 10 heads, a reading of 100 and from its 5-hour program to one day");
+});
+
+withSde("analyzeColony follows routes: unrouted inputs stop a factory, direct feeds cap it", () => {
+  const now = Date.parse("2026-11-04T12:00:00Z");
+  const pi = piData(sde!);
+  const g = (group: number) => sde!.typeIdsInGroups([group])[0];
+  const water = pi.schematic.get(id("Water"))!.id;
+  const ex = (pin_id: number, qty: number) => ({
+    pin_id, type_id: g(1063), latitude: 0, longitude: 0, install_time: iso(now - 2 * H), expiry_time: iso(now + 22 * H),
+    extractor_details: { cycle_time: 900, head_radius: 0.01, product_type_id: id("Aqueous Liquids"), qty_per_cycle: qty, heads: [] },
+  });
+  const fac = (pin_id: number) => ({ pin_id, type_id: g(1028), latitude: 0, longitude: 0, schematic_id: water, last_cycle_start: iso(now) });
+  const r = (route_id: number, s: number, d: number, type: string, quantity: number) =>
+    ({ route_id, source_pin_id: s, destination_pin_id: d, content_type_id: id(type), quantity });
+  // A small extractor feeds factory 2 directly; factory 3 has no input route; neither factory's Water goes anywhere.
+  const a = analyzeColony(sde!, pi, {
+    pins: [ex(1, 500), fac(2), fac(3)],
+    routes: [r(1, 1, 2, "Aqueous Liquids", 500)],
+  }, now);
+  assert.deepEqual(a.unroutedInputs, [{ product: id("Water"), input: id("Aqueous Liquids"), factories: 1 }]);
+  assert.equal(a.routeShortfalls.length, 1);
+  const s = a.routeShortfalls[0];
+  assert.equal(s.need, 6_000);
+  assert.ok(s.have > 0 && s.have < 3_000, `about 2,000/h reaches the factory (${s.have})`);
+  assert.deepEqual(a.unroutedOutputs, [{ type: id("Water"), from: "factory", pins: 2 }]);
+  // Planet-wide the extractor makes ~2,000/h but only the routed share counts: factory 3 makes nothing.
+  assert.ok(a.made.get(id("Water"))! < 40 * (s.have / s.need) + 1e-6);
+  // No routes in the payload at all (old data): fall back to the planet-wide balance.
+  const loose = analyzeColony(sde!, pi, { pins: [ex(1, 500), fac(2), fac(3)] }, now);
+  assert.deepEqual(loose.unroutedInputs, []);
 });
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -98,6 +159,7 @@ withSde("planets covers every character, ranks what needs attention and reports 
   assert.match(p.extractors[0].status, /left$/);
   assert.ok(p.factories.includes("Coolant (P2) x1 (1 idle)"), p.factories.join(", "));
   assert.ok(p.shortfalls.some((s: string) => /^Electrolytes: factories need 40\/h, the planet makes 0\/h/.test(s)), p.shortfalls.join("\n"));
+  assert.ok(p.routing.includes("1 factory making Coolant has no route bringing Electrolytes, so it can't run"), p.routing.join(" | "));
   assert.match(p.storage, /^1,900 \/ 10,000 m³/);
   assert.match(r.json.unavailable["Colony Alt"], /esi-planets\.manage_planets\.v1/);
 });

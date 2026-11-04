@@ -46,6 +46,10 @@ withSde("extraction colony fits the command center and makes P2 when it pays mor
   assert.equal(extractionColony(c, gas, id("Aqueous Liquids"), id("Ionic Solutions"), 0), null, "nothing fits a level 0 command center");
   assert.ok(factoriesThatFit(c, id("Nano-Factory"), 5) >= 15, "a level 5 CC holds many High-Tech plants");
   assert.equal(CC_LEVELS.length, 6);
+  // Longer programs give less per hour.
+  const week = extractionColony(c, ice, id("Aqueous Liquids"), id("Heavy Metals"), 5, 168)!;
+  assert.ok(week.iskPerHour < col.iskPerHour, `${week.iskPerHour} < ${col.iskPerHour}`);
+  assert.match(week.describe, /7-day \(2 h cycles\) programs/);
 });
 
 withSde("optimize feeds factories from the plan's own colonies before buying", () => {
@@ -81,6 +85,28 @@ withSde("optimize keeps the better of the value and budget-density rankings", ()
   for (const mode of ["value", "density"] as const) {
     assert.ok(best >= total(optimizeOnce(sde!, pi, pinCosts(sde!), prices(), planets, slots, tight, mode)) - 1e-6, mode);
   }
+  // The local search only ever keeps improvements over the two greedy starts.
+  const greedyOnly = total(optimize(sde!, pi, pinCosts(sde!), prices(), planets, slots, tight, { maxReplans: 0 }));
+  assert.ok(best >= greedyOnly - 1e-6, `${best} >= ${greedyOnly}`);
+});
+
+withSde("the local search leaves out a choice when that frees room for better ones", () => {
+  const pi = piData(sde!);
+  // One big-haul colony option ranks first in value order but uses most of the haul budget.
+  const planets = [
+    planet("Test I", "Storm", { "Noble Gas": 100, "Ionic Solutions": 100 }, 1),
+    planet("Test VI", "Barren", { "Noble Metals": 70, "Base Metals": 70 }, 6),
+    planet("Test VII", "Ice", { "Heavy Metals": 70, "Aqueous Liquids": 70 }, 7),
+  ];
+  const slots = [{ character: "A", slots: 3, ccLevel: 5 }, { character: "B", slots: 3, ccLevel: 5 }];
+  const params = { ...PARAMS, maxHaulPerDay: 2_500, maxCapitalPerDay: 0, factories: false };
+  const t0 = Date.now();
+  const plan = optimize(sde!, pi, pinCosts(sde!), prices(), planets, slots, params);
+  assert.ok(Date.now() - t0 < 20_000, "search stays fast");
+  const greedy = optimize(sde!, pi, pinCosts(sde!), prices(), planets, slots, params, { maxReplans: 0 });
+  const total = (p: ReturnType<typeof optimize>) => p.assignments.flatMap((a) => a.colonies).reduce((s, c) => s + c.iskPerHour, 0);
+  assert.ok(total(plan) >= total(greedy) - 1e-6);
+  if (plan.search) assert.match(plan.search, /^local search added \d+% by leaving out /);
 });
 
 withSde("optimize respects characters per planet and explains unused slots", () => {
@@ -158,13 +184,28 @@ withSde("pi_optimize plans every character's slots with readings, totals and ass
   });
   assert.equal(r.isError, false, r.text);
   assert.equal(r.json.system.name, "J105443");
-  assert.match(r.json.assumptions.p0_per_hour_at_100, /^30,000 \(default/);
+  assert.match(r.json.assumptions.p0_per_hour_at_100, /^30,000 on a one-day program \(default/);
+  assert.match(r.json.assumptions.extractor_programs[0], /^1-day \(15 min cycles\): 100%/);
   assert.equal(r.json.plan.length, 2, r.text);
   assert.equal(r.json.totals.input_purchases_per_day, "0.00 ISK");
   assert.ok(r.json.plan.every((p: any) => p.colonies.length === 3), "Interplanetary Consolidation 2 = 3 colonies each");
   assert.match(r.json.totals.isk_per_day, /ISK$/);
   assert.ok(r.json.best_options_by_planet["J105443 VII"].some((s: string) => /Heavy Metals \(100\)|Aqueous Liquids \(100\)/.test(s)));
   assert.ok(r.json.warnings.some((w: string) => /No scan readings for .*J105443 I\b/.test(w)), r.json.warnings.join("\n"));
+});
+
+withSde("pi_optimize plans longer programs for alts that log in less often", async () => {
+  const r = await callTool(piCtx(), "pi_optimize", {
+    abundance: { VII: { "Aqueous": 100, "Heavy Metals": 100 } },
+    max_input_isk_per_day: 0, factories: false,
+    program_hours_by_character: { "Planner Alt": 96 },
+  });
+  assert.equal(r.isError, false, r.text);
+  const alt = r.json.plan.find((p: any) => p.character === "Planner Alt");
+  const main = r.json.plan.find((p: any) => p.character === "Planner Main");
+  assert.ok(alt.colonies.every((c: string) => /4-day \(1 h cycles\) programs/.test(c)), alt.colonies.join(" | "));
+  assert.ok(main.colonies.every((c: string) => /1-day \(15 min cycles\) programs/.test(c)), main.colonies.join(" | "));
+  assert.ok(r.json.assumptions.extractor_programs.some((s: string) => /^4-day \(1 h cycles\): \d+% .*\(Planner Alt\)$/.test(s)));
 });
 
 withSde("pi_optimize rejects a resource the planet doesn't have, naming what it has", async () => {

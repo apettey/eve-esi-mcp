@@ -20,7 +20,8 @@ export function registerPiColonyTools(server: McpServer, ctx: Ctx) {
         "Status of PI colonies across every logged-in character (or one, with `character`): an attention list first (expired or " +
         "soon-expiring extractors, storage filling up, idle factories, factories short of input), then each colony with " +
         "its extractors (product, heads, time left, output now and averaged over the program from the decay curve), " +
-        "factories, what the planet makes per day after its own factories, input shortfalls, storage fill and time until " +
+        "factories, what the planet makes per day after its own factories, input shortfalls, routing problems (inputs no " +
+        "route brings, output no route carries away, direct feeds too small), storage fill and time until " +
         "full. ESI only refreshes a colony when it is opened in game, so `data_age` says how old each one is. " +
         "Use pi_optimize to plan colonies.",
       inputSchema: {
@@ -94,6 +95,27 @@ export function registerPiColonyTools(server: McpServer, ctx: Ctx) {
             return text;
           });
 
+          const routing = [
+            ...a.unroutedInputs.map((u) => {
+              const text = `${u.factories === 1 ? "1 factory" : `${u.factories} factories`} making ${sde.typeName(u.product)} ` +
+                `${u.factories === 1 ? "has" : "have"} no route bringing ${sde.typeName(u.input)}, so ${u.factories === 1 ? "it can't" : "they can't"} run`;
+              issues.push({ rank: 4, at: 0, text });
+              return text;
+            }),
+            ...a.routeShortfalls.map((s) => {
+              const text = `${sde.typeName(s.product)} factories get ${n0(s.have)}/h of the ${n0(s.need)}/h ${sde.typeName(s.input)} they need ` +
+                `through their routes (${Math.round((s.have / s.need) * 100)}%)`;
+              issues.push({ rank: 4, at: 0, text });
+              return text;
+            }),
+            ...a.unroutedOutputs.map((o) => {
+              const what = o.from === "extractor" ? (o.pins === 1 ? "extractor" : "extractors") : (o.pins === 1 ? "factory" : "factories");
+              const text = `${sde.typeName(o.type)} from ${o.pins} ${what} isn't routed anywhere`;
+              issues.push({ rank: 4, at: 0, text });
+              return text;
+            }),
+          ];
+
           const net = [...a.made]
             .map(([type, rate]) => [type, rate - Math.min(rate, a.used.get(type) ?? 0)] as const)
             .filter(([, r]) => r > 0.01)
@@ -133,6 +155,7 @@ export function registerPiColonyTools(server: McpServer, ctx: Ctx) {
             factories,
             makes_per_day: net,
             shortfalls,
+            routing,
             storage,
             contents: include_storage ? [...a.contents].map(([t, n]) => `${sde.typeName(t)} x${n0(n)}`) : undefined,
           };

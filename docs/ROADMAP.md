@@ -18,17 +18,19 @@ The tool-test harness (`src/test/harness.ts`) arrived after most tools. The tool
 Research and design are in `docs/PLANETARY_INTERACTION.md`. Shipped: PI schematics in the SDE index (schema 5),
 `pi_system_planets`, `pi_product`, `pi_optimize` (assigns every alt's slots; calibrates its yield from real extractors),
 `pi_colony_calc` (one layout or a real colony, on the same model as the optimiser) and `planets` (all characters,
-attention list, extractor output, balance, storage). Next:
+attention list, extractor output, balance, route checks, storage). Program length is modelled in both planners, and
+`pi_optimize` runs a local search after its greedy pass. Next:
 
-1. `pi_optimize`: model program length (yield per hour falls with longer programs; calibration currently uses whatever
-   programs ran). Optional per-planet readings history from repeated `planets` reads to track depletion.
-2. `pi_optimize` limits: greedy assignment (two rankings, best kept) can pick a factory before the colonies that would
-   feed it exist (a rebalancing pass fixes the input split afterwards, not the choice). Planned colonies use a 6% link
-   reserve; only real colonies in `pi_colony_calc` get real link lengths. Only two-extractor templates are considered.
-3. `planets`: shortfalls use planet-wide totals, not ESI routes, so a factory fed by a route from storage looks the same
-   as one fed directly.
-4. Verify live: whether depletion is shared between characters on one planet; the client-only constants (CC levels,
-   launchpad/storage volumes); and the community extractor decay curve against in-game per-cycle output.
+1. Verify live (needs the game client and running extractors; the tools can't read these from ESI): the extractor decay
+   curve against in-game per-cycle bars; the cycle length and `qty_per_cycle` on 2-, 4- and 7-day programs (the
+   program-length model is unverified beyond one day); the client-only constants (CC levels, launchpad/storage
+   volumes); whether depletion is shared between characters on one planet. Once the new colonies run, rerun
+   `pi_optimize` with the same readings so it calibrates from them.
+2. `pi_optimize` limits: the local search drops one choice at a time, so it can't swap two colonies at once. Planned
+   colonies use a 6% link reserve; only real colonies in `pi_colony_calc` get real link lengths. Only two-extractor
+   templates are considered. Optional per-planet readings history from repeated `planets` reads to track depletion.
+3. `planets`: a factory fed from storage is checked against the planet-wide balance, not against what is in storage
+   for it.
 
 ## Known gaps
 
