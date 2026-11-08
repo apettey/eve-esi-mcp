@@ -115,6 +115,7 @@ export function colonySheet(sde: Sde, pi: PiData, p: SavedPlan, c: PlanColony, m
 export interface ColonyTemplate {
   colony: PlanColony;
   name: string;
+  /** Path under the template folder: one folder per character, "Planet VI.json" inside it. */
   file: string;
   template: PiTemplate;
   links: string;
@@ -131,7 +132,8 @@ export function colonyTemplates(sde: Sde, pi: PiData, costs: PinCosts, p: SavedP
       diameterKm: radius ? (2 * radius) / 1000 : undefined,
     });
     return {
-      colony: c, name, file: templateFileName(name), template: t.template,
+      colony: c, name, file: `${templateFileName(c.character).replace(/\.json$/, "")}/${templateFileName(`Planet ${c.planet.name.split(" ").pop()}`)}`,
+      template: t.template,
       links: radius ? `${t.links.count} links, ${Math.round(t.links.totalKm)} km` : `${t.links.count} links`,
       fits: !radius || layoutFits(costs, pi, { ...c.layout, links: t.links }),
     };

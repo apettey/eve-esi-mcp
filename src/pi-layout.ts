@@ -90,7 +90,8 @@ export function factoryCost(costs: PinCosts, pi: PiData, product: number): Cost 
 }
 
 export function layoutCost(costs: PinCosts, pi: PiData, l: Layout): Cost {
-  const heads = l.extractors.reduce((n, e) => n + Math.max(0, e.heads - 1), 0);
+  // Every head costs CPU/PG, the first one too (in game a level 5 CC fits 2 extractors of 5+3 heads, not 5+5, with 10 basic factories).
+  const heads = l.extractors.reduce((n, e) => n + e.heads, 0);
   const base = addCosts(
     [costs.launchpad, l.launchpads], [costs.storage, l.storage], [costs.ecu, l.extractors.length], [costs.head, heads],
     ...l.factories.map((f) => [factoryCost(costs, pi, f.product), f.count] as [Cost, number]),

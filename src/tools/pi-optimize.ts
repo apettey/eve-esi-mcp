@@ -4,7 +4,7 @@ import type { Ctx } from "../context.js";
 import type { StoredCharacter } from "../auth/store.js";
 import type { Sde } from "../sde/db.js";
 import { piData, tierName, type PiData } from "../pi.js";
-import { analyzeColony, programFactor, yieldAt100 } from "../pi-colony.js";
+import { analyzeColony, programFactor, programHours, yieldAt100 } from "../pi-colony.js";
 import { optimize, pinCosts, programLabel, type PlanetInput, type Price, type Slot } from "../pi-optimize.js";
 import { colonySheet, colonyTemplates, haulLine, haulPerTrip as haulPlan, savePlan, toSavedPlan } from "../pi-plan.js";
 import { templateText } from "../pi-template.js";
@@ -25,13 +25,15 @@ function planetRef(planets: Array<{ id: number; name: string; celestial_index: n
 export const DEFAULT_YIELD_AT_100 = 30_000;
 
 /**
- * Real extractor output from the characters' colonies. Extractors in `systemId` on planets with scan readings give an
- * exact calibration (median of yieldAt100). Extractors elsewhere only give a range per 10 heads, since their readings
- * are unknown.
+ * Real extractor output from the characters' colonies. Every extractor in `systemId` sets that planet's measured output
+ * per head for its resource (median over extractors, converted to a one-day program), which the optimizer uses instead
+ * of the scan reading. Those on planets with readings also give the calibration for resources not measured yet (median
+ * of yieldAt100). Extractors elsewhere only give a range per 10 heads, since their readings are unknown.
  */
 async function calibrate(ctx: Ctx, sde: Sde, pi: PiData, chars: StoredCharacter[], systemId: number, planets: PlanetInput[], read: Set<number>) {
   const exact: number[] = [];
   const elsewhere: number[] = [];
+  const perHead = new Map<PlanetInput, Map<number, number[]>>();
   const now = Date.now();
   await mapLimit(chars, 3, async (c) => {
     if (!c.scopes.includes("esi-planets.manage_planets.v1")) return;
@@ -42,17 +44,27 @@ async function calibrate(ctx: Ctx, sde: Sde, pi: PiData, chars: StoredCharacter[
       const planet = planets.find((p) => p.id === col.planet_id);
       for (const ex of analyzeColony(sde, pi, layout, now).extractors) {
         if (!ex.program || !ex.heads) continue;
-        if (col.solar_system_id === systemId && planet && read.has(planet.id)) {
-          const y = yieldAt100(ex, planet.abundance.get(ex.product) ?? 0);
+        if (col.solar_system_id === systemId && planet) {
+          const hours = programHours(ex);
+          const byRes = perHead.get(planet) ?? new Map<number, number[]>();
+          byRes.set(ex.product, [...(byRes.get(ex.product) ?? []), ex.program.avgPerHour / ex.heads / (hours ? programFactor(hours) : 1)]);
+          perHead.set(planet, byRes);
+          const y = read.has(planet.id) ? yieldAt100(ex, planet.abundance.get(ex.product) ?? 0) : null;
           if (y) exact.push(y);
         } else elsewhere.push(ex.program.avgPerHour * (10 / ex.heads));
       }
     });
   });
-  exact.sort((x, y) => x - y);
+  const median = (xs: number[]) => xs.slice().sort((x, y) => x - y)[Math.floor(xs.length / 2)];
+  let measured = 0;
+  for (const [planet, byRes] of perHead) {
+    planet.perHead = new Map([...byRes].map(([r, xs]) => [r, median(xs)]));
+    measured += byRes.size;
+  }
   return {
-    value: exact.length ? exact[Math.floor(exact.length / 2)] : undefined,
+    value: exact.length ? median(exact) : undefined,
     count: exact.length,
+    measured,
     elsewhere: elsewhere.length ? { min: Math.min(...elsewhere), max: Math.max(...elsewhere), count: elsewhere.length } : undefined,
   };
 }
@@ -82,12 +94,17 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
           .describe("Characters to plan for (default: every logged-in character with PI skills)."),
         ignore_existing_colonies: z.boolean().optional()
           .describe("Plan every slot as if all colonies were abandoned (default false: free slots only)."),
+        spare_command_centers: z.record(z.string(), z.number().int().min(0).max(100)).optional()
+          .describe('No new command centers brought in: the spare ones you have by planet type, e.g. {"Gas": 4} (or {} for none). ' +
+            "Then each character only plans colonies on planets where it already has one in this system, plus one new colony " +
+            "per spare command center of that planet type."),
         market: z.string().optional().describe("Market for prices (default 'jita')."),
         tax_rate_pct: z.number().min(0).max(100).optional().describe("Customs office tax rate (default 0, e.g. your corp's POCOs)."),
         sell_fee_pct: z.number().min(0).max(30).optional().describe("Sales tax + broker fee when selling (default 5)."),
-        p0_per_hour_at_100: z.number().min(100).max(100000).optional()
+        p0_per_hour_at_100: z.number().min(100).max(1_000_000).optional()
           .describe("P0/hour from one 10-head extractor on a resource scanning 100. Default: calibrated from your extractors in this " +
-            "system on planets you gave readings for, else 30,000 (roughly one-day programs)."),
+            "system on planets you gave readings for, else 30,000 (roughly one-day programs). Where you already extract a resource on " +
+            "a planet, its measured output per head is used instead (unless this is given)."),
         market_share_pct: z.number().min(1).max(100).optional()
           .describe("Max share of an item's daily market volume the plan may trade (default 10)."),
         max_characters_per_planet: z.number().int().min(1).max(20).optional()
@@ -164,6 +181,22 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
         const n = a.ignore_existing_colonies ? ci.max_colonies : ci.free_slots ?? 0;
         if (n > 0) slots.push({ character: ci.character, slots: n, ccLevel: ci.max_command_center_level });
       }
+      // No command centers brought in: a character keeps to planets it already has a colony on, plus the spares.
+      let spareCommandCenters: Map<string, number> | undefined;
+      if (a.spare_command_centers) {
+        const types = [...new Set(planets.map((p) => p.type))];
+        spareCommandCenters = new Map();
+        for (const [ref, n] of Object.entries(a.spare_command_centers)) {
+          const type = types.find((t) => t.toLowerCase() === ref.trim().toLowerCase().replace(/ command center$/, ""));
+          if (!type) throw new UserError(`No ${ref} planet in this system. Planet types here: ${types.join(", ")}.`);
+          spareCommandCenters.set(type, n);
+        }
+        await mapLimit(slots, 3, async (slot) => {
+          const c = ctx.character(slot.character);
+          const colonies = await ctx.esi.get<any[]>(`/characters/${c.id}/planets`, { character: c, scope: "esi-planets.manage_planets.v1" });
+          slot.planets = new Set(colonies.filter((x) => x.solar_system_id === systemId).map((x) => x.planet_id));
+        });
+      }
       for (const [ref, hours] of Object.entries(a.program_hours_by_character ?? {})) {
         const name = ctx.character(ref).name;
         const slot = slots.find((s) => s.character === name);
@@ -181,7 +214,7 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
       const yieldNote = a.p0_per_hour_at_100 != null
         ? "given"
         : cal?.value
-          ? `calibrated: median of ${cal.count} extractor(s) in this system against your scan readings`
+          ? `calibrated: median of ${cal.count} extractor(s) in this system against your scan readings; used only where no extractor runs yet`
           : "default (no extractors in this system on planets with readings yet)";
 
       // Prices and daily volume for every PI commodity (raw P0 included: surplus P0 can be exported).
@@ -206,6 +239,7 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
         restockDays: a.restock_days ?? 2,
         exportRawP0: a.export_raw_p0 ?? false,
         programHours: a.program_hours ?? 24,
+        spareCommandCenters,
       };
       const plan = optimize(sde, pi, pinCosts(sde), prices, planets, slots, params);
 
@@ -216,8 +250,10 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
       if (unread.length) warnings.unshift(`No scan readings for ${unread.join(", ")}: assumed ${def} for every resource there.`);
       if (all.some((x) => x.kind === "extraction")) {
         warnings.push(
-          cal?.value
-            ? "Extraction yields are calibrated from your extractors here, converted from their program lengths to the plan's."
+          cal?.measured
+            ? `Extraction yields for ${cal.measured} planet/resource pair(s) are measured from your extractors there (per head, ` +
+              "converted to the plan's program length); the rest are estimated from scan readings" +
+              (cal.value ? " calibrated against those extractors." : ".")
             : "Extraction yields are estimates from scan readings. Once extractors run here, rerun with the same readings and " +
               "the tool calibrates itself from them.",
         );
@@ -293,6 +329,9 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
           max_haul_m3_per_day: params.maxHaulPerDay,
           factory_restock_every: `${params.restockDays} days (launchpad + 1 storage)`,
           slots: a.ignore_existing_colonies ? "every slot (existing colonies ignored)" : "free slots only",
+          new_command_centers: a.spare_command_centers
+            ? `only your spares (${[...(spareCommandCenters ?? [])].map(([t, n]) => `${t} ${n}`).join(", ") || "none"}); otherwise planets each character already has a colony on`
+            : undefined,
           command_centers: "CPU/PG from game client values per level, 6% kept free for links",
         },
         totals: {

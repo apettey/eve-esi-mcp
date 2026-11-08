@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import { piData } from "../pi.js";
 import {
-  CC_LEVELS, extractionColony, factoriesThatFit, optimize, optimizeOnce, pinCosts, type OptimizeParams, type PlanetInput, type Price,
+  CC_LEVELS, extractionColony, factoriesThatFit, optimize, optimizeOnce, pinCosts, withLinks, type OptimizeParams, type PlanetInput, type Price,
 } from "../pi-optimize.js";
+import { layoutFits } from "../pi-layout.js";
+import { buildTemplate } from "../pi-template.js";
 import { callTool, character, sde, testCtx, withSde } from "./harness.js";
 import { checkTemplate } from "./pi-template-check.js";
 
@@ -51,6 +53,78 @@ withSde("extraction colony fits the command center and makes P2 when it pays mor
   const week = extractionColony(c, ice, id("Aqueous Liquids"), id("Heavy Metals"), 5, 168)!;
   assert.ok(week.iskPerHour < col.iskPerHour, `${week.iskPerHour} < ${col.iskPerHour}`);
   assert.match(week.describe, /7-day \(2 h cycles\) programs/);
+});
+
+withSde("a planet's measured output per head replaces its scan reading, so factories match real extraction", () => {
+  const pi = piData(sde!);
+  const c = { sde: sde!, pi, costs: pinCosts(sde!), prices: prices(), params: PARAMS };
+  const noble = id("Noble Metals");
+  const estimated = planet("Test VI", "Barren", { "Noble Metals": 58 });
+  const measured = { ...estimated, perHead: new Map([[noble, 7000]]) };
+  const guess = extractionColony(c, estimated, noble, noble, 5)!;
+  const real = extractionColony(c, measured, noble, noble, 5)!;
+  const rl = real.layout!;
+  const gl = guess.layout!;
+  for (const e of rl.extractors) assert.equal(e.perHour, 7000 * e.heads, "measured rate x heads");
+  // A basic factory takes 6,000 P0/h: at 7,000 per head the colony trades heads for factories to process it all.
+  const p0 = rl.extractors.reduce((n, e) => n + e.perHour, 0);
+  const factories = rl.factories.reduce((n, f) => n + f.count, 0);
+  assert.ok(factories * 6000 >= p0 * 0.8, `${factories} factories for ${p0} P0/h`);
+  assert.ok(gl.extractors[0].perHour < 7000 * gl.extractors[0].heads, "the reading-based guess was lower");
+});
+
+withSde("colonies on a gas giant pay for their long links, so the template still fits the command center", () => {
+  const pi = piData(sde!);
+  const costs = pinCosts(sde!);
+  const c = { sde: sde!, pi, costs, prices: prices(), params: PARAMS };
+  // The biggest gas giant in the system: a template's links there run ~300 km each.
+  const gas = sde!.planetsInSystem(sde!.systemIdByName("J105443")!)
+    .filter((p) => pi.planetType.get(p.type_id) === "Gas")
+    .sort((a, b) => sde!.planetRadius(b.id)! - sde!.planetRadius(a.id)!)[0];
+  const aqueous = id("Aqueous Liquids");
+  const ionic = id("Ionic Solutions");
+  const input: PlanetInput = { ...planet(gas.name, "Gas", {}, gas.id), perHead: new Map([[aqueous, 5000], [ionic, 5000]]) };
+  const col = extractionColony(c, input, aqueous, ionic, 5)!;
+  const l = col.layout!;
+  assert.ok(l.links && l.links.totalKm > 2000, `links counted: ${JSON.stringify(l.links)}`);
+  const t = buildTemplate(sde!, pi, { layout: l, planetType: "Gas", name: "t", diameterKm: (2 * sde!.planetRadius(gas.id)!) / 1000 });
+  assert.equal(t.links.count, l.links!.count, "the planner counts the links the template will have");
+  assert.ok(Math.abs(t.links.totalKm - l.links!.totalKm) < l.links!.totalKm * 0.05, `${t.links.totalKm} vs ${l.links!.totalKm}`);
+  assert.ok(layoutFits(costs, pi, { ...l, links: t.links }), "the template fits");
+  // Same colony on an unknown planet keeps the flat link reserve.
+  assert.equal(withLinks(sde!, { id: 1 }, { ...l, links: undefined }).links, undefined);
+  const small = sde!.planetsInSystem(sde!.systemIdByName("J105443")!).sort((a, b) => sde!.planetRadius(a.id)! - sde!.planetRadius(b.id)!)[0];
+  assert.ok(withLinks(sde!, gas, l).links!.totalKm > 5 * withLinks(sde!, small, l).links!.totalKm, "links grow with the planet");
+  assert.ok(factoriesThatFit(c, id("Coolant"), 5, gas) <= factoriesThatFit(c, id("Coolant"), 5, small), "no more factories fit where links are long");
+});
+
+withSde("with no command centers brought in, characters keep to their planets plus the spares", () => {
+  const pi = piData(sde!);
+  const planets = [
+    planet("Test VI", "Barren", { "Noble Metals": 90, "Base Metals": 60 }, 6),
+    planet("Test VII", "Ice", { "Heavy Metals": 100, "Aqueous Liquids": 100 }, 7),
+    planet("Test III", "Gas", { "Aqueous Liquids": 60, "Ionic Solutions": 60 }, 3),
+  ];
+  const slots = [{ character: "A", slots: 3, ccLevel: 5, planets: new Set([6]) }, { character: "B", slots: 3, ccLevel: 5, planets: new Set<number>() }];
+  const plan = optimize(sde!, pi, pinCosts(sde!), prices(), planets, slots, { ...PARAMS, maxCapitalPerDay: 0, spareCommandCenters: new Map([["Gas", 1]]) });
+  const where = (who: string) => plan.assignments.find((x) => x.character === who)!.colonies.map((c) => c.planet.name);
+  const all = [...where("A"), ...where("B")];
+  assert.ok(where("A").includes("Test VI"), `A keeps its planet: ${where("A")}`);
+  assert.ok(!all.includes("Test VII"), "no Ice command center: nobody moves to the Ice planet");
+  assert.equal(all.filter((n) => n === "Test III").length, 1, "one spare Gas command center: one new Gas colony");
+});
+
+withSde("every extractor head costs power: a level 5 barren colony with 10 factories fits 5+3 heads, not 5+5 (as built in game)", () => {
+  const pi = piData(sde!);
+  const costs = pinCosts(sde!);
+  const vi = sde!.planetsInSystem(sde!.systemIdByName("J105443")!).find((p) => p.name.endsWith(" I"))!;
+  const noble = id("Noble Metals");
+  const colony = (a: number, b: number) => withLinks(sde!, vi, {
+    ccLevel: 5, storage: 0, launchpads: 1, factories: [{ product: id("Precious Metals"), count: 10 }],
+    extractors: [{ resource: noble, heads: a, perHour: 1 }, { resource: noble, heads: b, perHour: 1 }],
+  });
+  assert.equal(layoutFits(costs, pi, colony(5, 3)), true, "what the game allowed");
+  assert.equal(layoutFits(costs, pi, colony(5, 4)), false, "one more head didn't fit in game");
 });
 
 withSde("optimize feeds factories from the plan's own colonies before buying", () => {
@@ -176,6 +250,7 @@ withSde("pi_optimize calibrates yield from a real extractor on a planet with rea
   assert.equal(r.isError, false, r.text);
   assert.match(r.json.assumptions.p0_per_hour_at_100, /calibrated: median of 1 extractor/);
   assert.doesNotMatch(r.json.assumptions.p0_per_hour_at_100, /^30,000/);
+  assert.ok(r.json.warnings.some((w: string) => /yields for 1 planet\/resource pair\(s\) are measured from your extractors/.test(w)), r.json.warnings.join("\n"));
 });
 
 withSde("pi_optimize plans every character's slots with readings, totals and assumptions", async () => {
@@ -246,7 +321,7 @@ withSde("pi_optimize templates gives an importable colony template per colony", 
     checkTemplate(t);
     assert.equal(t.Cmt, info.name);
     assert.match(info.name, /^J105443 [IVX]+ - .+ \(Planner (Main|Alt)\)$/);
-    assert.equal(info.file, `${info.name}.json`);
+    assert.match(info.file, /^Planner (Main|Alt)\/Planet [IVX]+\.json$/, "one folder per character");
     assert.equal(info.structures, t.P.length);
     assert.match(info.links, /^\d+ links, \d+ km$/, "real link lengths from the planet's size");
     assert.ok(t.Diam > 1000, "the planet's real diameter");

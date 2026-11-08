@@ -440,13 +440,17 @@ needed. Keep it deterministic and explain the pick: "Storm planet, Suspended Pla
 ### 5.2a As built (`pi_optimize`)
 
 - **Extraction colonies:** every resource pair on every planet (including two extractors on one resource). The most heads
-  that fit the command center (CPU/PG from the SDE, CC levels from the client, 6% kept for links). The output is sold
-  as P1 or combined into P2, whichever pays more. Yield = `p0_per_hour_at_100 × reading/100 × heads/10` (an assumption,
-  shown in the output).
+  that fit the command center (CPU/PG from the SDE, CC levels from the client, and the links the colony's template will
+  have on that planet: one per structure, 0.0122 rad each, so ~1,000 km per link on a big gas giant). The output is sold
+  as P1 or combined into P2, whichever pays more. Yield = the planet's measured output per head for that resource where
+  a character already extracts it there, else `p0_per_hour_at_100 × reading/100 × heads/10` (shown in the output).
 - **Factory colonies:** any P2-P4 product. Inputs come first from the plan's own colonies (forgoing their sale value
   and their export volume), and the rest are bought at the lowest sell order. Sized by the command center and by a
   restock interval that must fit the launchpad and one storage facility. Limited by the daily input budget, the daily
   haul budget, and the share of each item's daily market volume.
+- **Factory colonies go on the smallest planets** (shortest links).
+- **No imports (`spare_command_centers`):** each character only plans colonies on planets where it already has one,
+  plus one new colony per spare command center of that planet type.
 - **Assignment:** greedy by ISK/day over all characters' slots. Each character gets one colony per planet, extracting
   characters per planet are capped, and the same resource pair isn't extracted twice on one planet. A final pass
   re-splits factory inputs lowest tier first, so local output feeds factories before anything is bought.
@@ -461,6 +465,9 @@ factories and piled up 0.5-1.3M unprocessed P0 in storage. `pi_optimize` therefo
 
 - defaults to 30,000 P0/h per 10 heads at a reading of 100, and calibrates itself (median) from the characters' own
   extractors in the target system on planets with scan readings;
+- uses each planet's measured output per head (median of its extractors, converted to a one-day program) wherever a
+  character already extracts that resource there. In one C5 system, output per head was 4,000-8,000 P0/h whatever
+  the scan reading (35-100), so readings alone gave yields up to 4x too low and plans with too many heads;
 - tries every head count with as many basic factories as still fit, and leaves surplus P0 unprocessed unless
   `export_raw_p0` is set.
 
@@ -469,7 +476,7 @@ factories and piled up 0.5-1.3M unprocessed P0 in storage. `pi_optimize` therefo
 `pi_colony_calc` and `pi_optimize` use one deterministic model, so the optimiser's numbers can be checked colony by
 colony:
 
-- **Cost:** SDE CPU/PG per structure, plus heads beyond the first. Links cost 15 tf + 0.2 tf/km and 10 MW + 0.15 MW/km.
+- **Cost:** SDE CPU/PG per structure, plus every extractor head (the first one too, confirmed in game). Links cost 15 tf + 0.2 tf/km and 10 MW + 0.15 MW/km.
   Real colonies get real link lengths from pin latitude/longitude and the planet radius (SDE schema 6); otherwise 6% of
   the command center is kept for links.
 - **Production:** an hour simulated tier by tier. Shared inputs are split in proportion to demand, and a factory runs at
