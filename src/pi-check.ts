@@ -73,6 +73,8 @@ export function checkColony(sde: Sde, pi: PiData, plan: SavedPlan, c: PlanColony
     if (!got.length) { issues.push(`no ${name(res)} extractor`); continue; }
     if (got.length < w.count) issues.push(`${got.length} of ${w.count} ${name(res)} extractors`);
     if (heads < w.heads) issues.push(`${name(res)} ${heads} of ${w.heads} heads`);
+    // Extra heads use the CPU/PG the planned factories need (every head costs 550 MW).
+    if (heads > w.heads) issues.push(`${name(res)} ${heads} heads, plan ${w.heads}: remove ${heads - w.heads} so the factories fit`);
     headParts.push(`${name(res)} ${heads}`);
   }
   for (const [res, got] of have) if (!want.has(res)) issues.push(`extracts ${name(res)} (${got.length}), not in the plan`);

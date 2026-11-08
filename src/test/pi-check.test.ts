@@ -37,13 +37,13 @@ function fixture() {
     extractor_details: { cycle_time: 900, heads: heads(n), product_type_id: noble, qty_per_cycle: 3000 },
   });
   /** The extraction colony as built: two extractors (8 and 7 heads), two Precious Metals factories, all routed. */
-  const extractionLayout = (opts: { routeOutput?: boolean; expiry?: number } = {}) => ({
+  const extractionLayout = (opts: { routeOutput?: boolean; expiry?: number; heads?: [number, number] } = {}) => ({
     links: [],
     pins: [
       { pin_id: 1, type_id: pins.launchpad, latitude: 1.5, longitude: 1.5 },
       { pin_id: 2, type_id: pins.basic, schematic_id: sid(precious), last_cycle_start: iso(NOW - 600_000) },
       { pin_id: 3, type_id: pins.basic, schematic_id: sid(precious), last_cycle_start: iso(NOW - 600_000) },
-      ecu(4, 8), ecu(5, 7, opts.expiry),
+      ecu(4, opts.heads?.[0] ?? 8), ecu(5, opts.heads?.[1] ?? 7, opts.expiry),
     ],
     routes: [
       { source_pin_id: 4, destination_pin_id: 1, content_type_id: noble, quantity: 3000 },
@@ -86,6 +86,9 @@ withSde("the plan check says per colony what differs from the plan", () => {
     "Precious Metals from 1 factory isn't routed anywhere",
   ]);
   assert.deepEqual(checkColony(sde!, f.pi, f.plan, f.extraction, null, null, NOW).issues, ["not built yet"]);
+  // More heads than planned use the power the planned factories need.
+  const over = checkColony(sde!, f.pi, f.plan, f.extraction, f.extractionLayout({ heads: [10, 8] }), 5, NOW);
+  assert.deepEqual(over.issues, ["Noble Metals 18 heads, plan 16: remove 2 so the factories fit"]);
 
   // Factory colonies: less than a day of inputs on hand says what to bring for the restock period.
   const empty = checkColony(sde!, f.pi, f.plan, f.factory, f.factoryLayout(0), 5, NOW);
