@@ -19,7 +19,7 @@ withSde("layout cost adds up SDE structure costs and links", () => {
     factories: [{ product: id("Toxic Metals"), count: 3 }],
   };
   const c = layoutCost(costs, pi, l);
-  const expectPg = costs.launchpad.pg + costs.storage.pg + costs.ecu.pg + 7 * costs.head.pg + 3 * costs.basic.pg;
+  const expectPg = costs.launchpad.pg + costs.storage.pg + costs.ecu.pg + 8 * costs.head.pg + 3 * costs.basic.pg; // every head, the first too
   assert.equal(c.pg, expectPg);
   assert.deepEqual(layoutCapacity(l), { cpu: CC_LEVELS[5].cpu * (1 - LINK_RESERVE), pg: CC_LEVELS[5].pg * (1 - LINK_RESERVE) });
   const linked = layoutCost(costs, pi, { ...l, links: { count: 5, totalKm: 100 } });
@@ -82,7 +82,7 @@ withSde("pi_colony_calc says a layout doesn't fit and how to make it fit", async
 withSde("pi_colony_calc suggests the best addition that still fits", async () => {
   const r = await callTool(calcCtx(), "pi_colony_calc", {
     planet_type: "Lava",
-    extractors: [{ resource: "Heavy Metals", heads: 8, p0_per_hour: 25_000 }, { resource: "Heavy Metals", heads: 8, p0_per_hour: 25_000 }],
+    extractors: [{ resource: "Heavy Metals", heads: 7, p0_per_hour: 25_000 }, { resource: "Heavy Metals", heads: 7, p0_per_hour: 25_000 }],
     factories: [{ product: "Toxic Metals", count: 4 }],
     storage_facilities: 1,
     links: { count: 7, total_km: 200 }, // like the real colony; the default 6% reserve leaves no room for a 5th basic
@@ -94,7 +94,7 @@ withSde("pi_colony_calc suggests the best addition that still fits", async () =>
   // The build sheet: what to place, routes, each visit, and the surplus P0 warning.
   const steps: string[] = r.json.setup;
   assert.match(steps[0], /^Command center at level 5\. Place 1 Launchpad, 1 Storage Facility, 2 Extractor Control Units, 4 Basic Industry Facilities;/);
-  assert.match(steps[1], /^Extractor 1: Heavy Metals, 8 heads .* 1-day program \(15 min cycles\), about 25,000\/h\. Route its Heavy Metals to the launchpad\.$/);
+  assert.match(steps[1], /^Extractor 1: Heavy Metals, 7 heads .* 1-day program \(15 min cycles\), about 25,000\/h\. Route its Heavy Metals to the launchpad\.$/);
   assert.ok(steps.some((x) => /^4 x Basic Industry Facility on schematic Toxic Metals: route 3,000 Heavy Metals per cycle from the launchpad to each of the 4/.test(x)), steps.join(" | "));
   assert.ok(steps.some((x) => /^Every day: restart the extractor programs; collect [\d,]+ Toxic Metals from the launchpad\.$/.test(x)), steps.join(" | "));
   assert.ok(steps.some((x) => /can't use all the Heavy Metals \([\d,]+\/day spare\).*fills it in about \d+ days/.test(x)), steps.join(" | "));

@@ -66,7 +66,7 @@ withSde("a saved plan gives the same sheets and templates every time, without fe
   assert.deepEqual(a.texts, opt.texts, "the same templates pi_optimize gave when it saved");
   assert.equal(a.json.colonies.length, planned);
   assert.equal(a.json.sheets.length, planned);
-  for (const line of a.json.colonies) assert.match(line, /^Plan (Main|Alt): J105443 [IVX]+ \(\w+\) .* Template "J105443 [IVX]+ - .+\.json" \(\d+ structures, \d+ links, \d+ km\)$/);
+  for (const line of a.json.colonies) assert.match(line, /^Plan (Main|Alt): J105443 [IVX]+ \(\w+\) .* Template "Plan (Main|Alt)\/Planet [IVX]+\.json" \(\d+ structures, \d+ links, \d+ km\)$/);
   for (const t of a.texts) checkTemplate(JSON.parse(t));
   assert.ok(a.json.haul_per_trip.take_out_and_sell.length > 0);
   // The routine for every undock: one run per character, each step a planet (or docking) with where things go.
@@ -106,15 +106,18 @@ withSde("pi_plan_export writes one template per colony and a build book", async 
   assert.equal(r.isError, false, r.text);
   assert.equal(r.json.plan, "Home plan", "the latest plan by default");
   assert.equal(r.json.folder, folder);
-  const files = readdirSync(folder);
-  assert.equal(files.filter((f) => f.endsWith(".json")).length, r.json.templates_written.length);
+  // One folder per character, "Planet VI.json" per colony.
+  const files = readdirSync(folder, { recursive: true }).map(String).filter((f) => f.endsWith(".json"));
+  assert.equal(files.length, r.json.templates_written.length);
+  assert.deepEqual(readdirSync(folder).filter((f) => !f.endsWith(".md")).sort(), ["Plan Alt", "Plan Main"]);
   for (const f of r.json.templates_written) {
     const text = readFileSync(join(folder, f), "utf8");
     assert.match(text, /^\{"CmdCtrLv": \d, "Cmt": .*"Diam": \d+\.\d+, "L": \[/, "written the way the client writes templates");
     assert.ok(!text.includes("\n"), "one line");
     const t = JSON.parse(text);
     checkTemplate(t);
-    assert.equal(`${t.Cmt}.json`, f);
+    assert.match(f, /^Plan (Main|Alt)\/Planet [IVX]+\.json$/);
+    assert.match(t.Cmt, /^J105443 [IVX]+ - .+ \(Plan (Main|Alt)\)$/, "the name shown in game still says what it is");
   }
   assert.equal(r.json.build_book, join(folder, "Home plan.md"));
   const book = readFileSync(r.json.build_book, "utf8");

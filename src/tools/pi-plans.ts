@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { Ctx } from "../context.js";
@@ -163,8 +163,8 @@ export function registerPiPlanTools(server: McpServer, ctx: Ctx) {
     {
       title: "Write a saved PI plan's colony templates",
       description:
-        "Writes a saved PI plan (pi_optimize `save_as`) to disk: one EVE colony template .json per colony into the game's " +
-        "template folder (default Documents\\EVE\\PlanetaryInteractionTemplates, or OneDrive's Documents when EVE lives there), " +
+        "Writes a saved PI plan (pi_optimize `save_as`) to disk: one EVE colony template per colony into the game's " +
+        "template folder (default Documents\\EVE\\PlanetaryInteractionTemplates, or OneDrive's Documents when EVE lives there), one folder per character with 'Planet VI.json' per colony, " +
         "plus a markdown build book (overview, haul, a build sheet per colony). Files of the same name are replaced. Writes " +
         "files on this computer, so confirm with the user first (say the folder). In game: Planetary Industry view > Open " +
         "template, then pick the colony's template.",
@@ -189,6 +189,7 @@ export function registerPiPlanTools(server: McpServer, ctx: Ctx) {
         mkdirSync(folder, { recursive: true });
         for (const t of templates) {
           const path = join(folder, t.file);
+          mkdirSync(dirname(path), { recursive: true });
           if (existsSync(path)) replaced++;
           writeFileSync(path, templateText(t.template));
         }

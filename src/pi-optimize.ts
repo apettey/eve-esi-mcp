@@ -4,6 +4,7 @@ import { programCycleSeconds, programFactor } from "./pi-colony.js";
 import {
   BASIC_P0_PER_HOUR, LAUNCHPAD_M3, MAX_HEADS, STORAGE_M3, layoutFits, simulate, type Flow, type Layout, type PinCosts,
 } from "./pi-layout.js";
+import { TEMPLATE_SPACING } from "./pi-template.js";
 
 export { CC_LEVELS, LAUNCHPAD_M3, STORAGE_M3, pinCosts, type Cost, type PinCosts } from "./pi-layout.js";
 
@@ -28,6 +29,11 @@ export interface PlanetInput {
   type: string;
   /** P0 type id -> scan reading 0-100. */
   abundance: Map<number, number>;
+  /**
+   * P0 type id -> P0 per hour per extractor head on a one-day program, measured from the characters' own extractors on
+   * this planet. Replaces the reading-based estimate for that resource (scan readings predict real output poorly).
+   */
+  perHead?: Map<number, number>;
 }
 
 export interface Slot {
@@ -36,6 +42,11 @@ export interface Slot {
   ccLevel: number;
   /** Extractor program length this character runs, in hours (default: params.programHours). */
   programHours?: number;
+  /**
+   * Planets this character already has a colony on. When set, it may only plan colonies there, plus one per spare
+   * command center (params.spareCommandCenters): a new colony needs a command center of the planet's type.
+   */
+  planets?: Set<number>;
 }
 
 export interface OptimizeParams {
@@ -61,6 +72,8 @@ export interface OptimizeParams {
   restockDays: number;
   /** Haul and sell raw P0 the basic factories can't process (otherwise it piles up unused). */
   exportRawP0: boolean;
+  /** Spare command centers by planet type ("Gas": 4), for colonies on planets outside a slot's `planets`. */
+  spareCommandCenters?: Map<string, number>;
 }
 
 export interface Colony {
@@ -145,16 +158,20 @@ export function extractionColony(
   if (!p1a || !p1b) return null;
   const p2 = r1 === r2 ? undefined : p2From(pi, p1a, p1b);
   const ab = (r: number) => planet.abundance.get(r) ?? 0;
+  const perHour = (r: number, heads: number) => {
+    const measured = planet.perHead?.get(r);
+    return measured != null ? measured * factor * heads : params.yieldAtFull * factor * (ab(r) / 100) * (heads / MAX_HEADS);
+  };
   let best: Colony | null = null;
   let bestHeads = Infinity;
   for (let heads = MAX_HEADS; heads >= 1; heads--) {
-    const extractors = [r1, r2].map((r) => ({ resource: r, heads, perHour: params.yieldAtFull * factor * (ab(r) / 100) * (heads / MAX_HEADS) }));
+    const extractors = [r1, r2].map((r) => ({ resource: r, heads, perHour: perHour(r, heads) }));
     const rate = new Map<number, number>();
     for (const e of extractors) rate.set(e.resource, (rate.get(e.resource) ?? 0) + e.perHour);
     const need = new Map([...rate].map(([r, v]) => [r, Math.max(1, Math.ceil(v / BASIC_P0_PER_HOUR - 1e-9))]));
     for (let adv = 0; adv <= (p2 ? 4 : 0); adv++) {
       let storage = 0;
-      const layout = (alloc: Map<number, number>): Layout => ({
+      const layout = (alloc: Map<number, number>): Layout => withLinks(c.sde, planet, {
         ccLevel, extractors, storage, launchpads: 1,
         factories: [
           ...[...alloc].map(([r, n]) => ({ product: p1From(pi, r)!, count: n })),
@@ -213,6 +230,18 @@ export function extractionColony(
   return best;
 }
 
+/**
+ * The links a colony's template will have on this planet: one per structure past the launchpad, each one template
+ * spacing long. The client keeps a template's angular spacing, so links on a gas giant are ten times longer than on a
+ * small planet and cost real CPU/powergrid. Unknown radius: none (the layout keeps the flat link reserve instead).
+ */
+export function withLinks(sde: Sde, planet: { id: number }, l: Layout): Layout {
+  const radius = sde.planetRadius(planet.id);
+  if (!radius) return l;
+  const count = l.extractors.length + l.factories.reduce((n, f) => n + f.count, 0) + l.storage + l.launchpads - 1;
+  return { ...l, links: { count, totalKm: count * TEMPLATE_SPACING * (radius / 1000) } };
+}
+
 /** "1-day" / "12-hour" with the cycle length, for colony descriptions. */
 export function programLabel(hours: number): string {
   const len = hours % 24 === 0 ? `${hours / 24}-day` : `${hours}-hour`;
@@ -220,10 +249,11 @@ export function programLabel(hours: number): string {
   return `${len} (${cyc >= 60 ? `${cyc / 60} h` : `${cyc} min`} cycles)`;
 }
 
-/** How many factories of a product fit a command center next to a launchpad and one storage facility. */
-export function factoriesThatFit(c: Ctx, product: number, ccLevel: number): number {
+/** How many factories of a product fit a command center next to a launchpad and one storage facility (on `planet`, with its link lengths). */
+export function factoriesThatFit(c: Ctx, product: number, ccLevel: number, planet?: { id: number }): number {
+  const layout = (n: number): Layout => ({ ccLevel, extractors: [], storage: 1, launchpads: 1, factories: [{ product, count: n }] });
   let n = 0;
-  while (layoutFits(c.costs, c.pi, { ccLevel, extractors: [], storage: 1, launchpads: 1, factories: [{ product, count: n + 1 }] })) n++;
+  while (layoutFits(c.costs, c.pi, planet ? withLinks(c.sde, planet, layout(n + 1)) : layout(n + 1))) n++;
   return n;
 }
 
@@ -374,7 +404,9 @@ export function optimizeOnce(
     }
     margins.sort((a, b) => b.iskPerHour - a.iskPerHour);
   }
-  const highTechPlanets = planets.filter((p) => pi.highTech.has(p.type));
+  // Factory colonies have no resource to follow: the smallest planets first, where links are shortest.
+  const bySize = planets.slice().sort((x, y) => (sde.planetRadius(x.id) ?? Infinity) - (sde.planetRadius(y.id) ?? Infinity));
+  const highTechPlanets = bySize.filter((p) => pi.highTech.has(p.type));
 
   const vol = (type: number) => volume(sde, type);
   const m3 = (flows: Flow[]) => flows.reduce((s, f) => s + vol(f.type) * f.perHour * 24, 0);
@@ -454,11 +486,14 @@ export function optimizeOnce(
       describe: `factory: ${n} x ${pi.factoryName.get(pi.tier.get(product)!)} making ${typeName(sde, product)} from ${parts} ` +
         `-> ${Math.round(outPerHour * 24).toLocaleString("en-US")}/day`,
       key: String(product), product, factories: n, local,
-      layout: { ccLevel: lvl, extractors: [], storage: 1, launchpads: 1, factories: [{ product, count: n }] },
+      layout: withLinks(sde, planet, { ccLevel: lvl, extractors: [], storage: 1, launchpads: 1, factories: [{ product, count: n }] }),
     };
   };
 
   const free = new Map(slots.map((s) => [s.character, s.slots]));
+  // A colony on a planet the character has no colony on uses up a spare command center of that type.
+  const spare = new Map(params.spareCommandCenters ?? []);
+  const allowed = (slot: Slot, planet: PlanetInput) => !slot.planets || slot.planets.has(planet.id) || (spare.get(planet.type) ?? 0) > 0;
   const onPlanet = new Map<string, Set<number>>(slots.map((s) => [s.character, new Set()]));
   const extractorsOn = new Map<number, number>();
   const taken = new Set<string>(); // planet + resource pair already extracted by someone
@@ -471,7 +506,7 @@ export function optimizeOnce(
       const mine = onPlanet.get(slot.character)!;
       const lvl = Math.min(slot.ccLevel, 5);
       for (const ex of extraction.get(variant(slot)) ?? []) {
-        if (mine.has(ex.planet.id) || m3(ex.outputs) > haulLeft) continue;
+        if (mine.has(ex.planet.id) || m3(ex.outputs) > haulLeft || !allowed(slot, ex.planet)) continue;
         if ((extractorsOn.get(ex.planet.id) ?? 0) >= params.maxCharactersPerPlanet) continue;
         // The same resources twice on one planet would compete for the same deposits.
         if (taken.has(`${ex.planet.id}:${ex.key}`) || banned.has(choiceId(ex))) continue;
@@ -480,11 +515,11 @@ export function optimizeOnce(
       }
       for (const product of products) {
         if (banned.has(`f:${product}`)) continue;
-        const where = (pi.tier.get(product) === 4 ? highTechPlanets : planets).find((p) => !mine.has(p.id));
+        const where = (pi.tier.get(product) === 4 ? highTechPlanets : bySize).find((p) => !mine.has(p.id) && allowed(slot, p));
         if (!where) continue;
         // Try every factory count that fits the command center; keep the most valuable.
-        const fk = `${product}|${lvl}`;
-        if (!prep.fit.has(fk)) prep.fit.set(fk, factoriesThatFit(c, product, lvl));
+        const fk = `${product}|${lvl}|${where.id}`;
+        if (!prep.fit.has(fk)) prep.fit.set(fk, factoriesThatFit(c, product, lvl, where));
         for (let n = prep.fit.get(fk)!; n >= 1; n--) {
           const col = factoryColony(product, n, where, lvl);
           if (!col || col.iskPerHour <= 0) continue;
@@ -498,6 +533,7 @@ export function optimizeOnce(
     assignments.get(slot.character)!.push(colony);
     free.set(slot.character, free.get(slot.character)! - 1);
     onPlanet.get(slot.character)!.add(colony.planet.id);
+    if (slot.planets && !slot.planets.has(colony.planet.id)) spare.set(colony.planet.type, spare.get(colony.planet.type)! - 1);
     if (colony.kind === "extraction") {
       extractorsOn.set(colony.planet.id, (extractorsOn.get(colony.planet.id) ?? 0) + 1);
       taken.add(`${colony.planet.id}:${colony.key}`);

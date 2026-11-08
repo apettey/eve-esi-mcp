@@ -30,15 +30,16 @@ decimal: the client rejects an integer). Next:
    program-length model is unverified beyond one day); the client-only constants (CC levels, launchpad/storage
    volumes); whether depletion is shared between characters on one planet. Once the new colonies run, rerun
    `pi_optimize` with the same readings so it calibrates from them.
-2. `pi_optimize` limits: the local search drops one choice at a time, so it can't swap two colonies at once. Planned
-   colonies use a 6% link reserve; only real colonies in `pi_colony_calc` get real link lengths. Only two-extractor
-   templates are considered. Optional per-planet readings history from repeated `planets` reads to track depletion.
+2. `pi_optimize` limits: the local search drops one choice at a time, so it can't swap two colonies at once. Only
+   two-extractor templates are considered, with the same heads on both. Resources not extracted yet on a planet are
+   still estimated from scan readings, which predict real output poorly. No P3/P4 chains across colonies yet (the
+   greedy pass has no lookahead), though they would pack more value per m³ when the haul limit binds. Optional per-planet readings history from repeated `planets` reads to track depletion.
 3. `planets`: a factory fed from storage is checked against the planet-wide balance, not against what is in storage
    for it.
 4. Colony templates: confirm in game that generated templates import and place as expected (structure spacing in
    radians, how the client uses `Diam` on a planet of another size, whether routes through an extractor are accepted).
-   On gas giants the template's 0.0122 rad spacing makes links several hundred km long; a tighter layout there would
-   save CPU/PG.
+   The client keeps the angular spacing (confirmed: built colonies have 0.012 rad links, ~1,000 km on a big gas
+   giant); the planner now costs those links.
 
 ## Known gaps
 
