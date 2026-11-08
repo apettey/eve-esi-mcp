@@ -82,7 +82,7 @@ export function registerPiPlanTools(server: McpServer, ctx: Ctx) {
         "prices when saved, its template file name), goods moved between colonies, the haul per trip, a build sheet per colony " +
         "and, with `templates`, an importable EVE colony template per colony as extra text blocks. With `check`: whether what " +
         "each character built matches the plan, one line per colony (missing colonies, command center level, extractor " +
-        "resources and heads, programs ended or of the wrong length, factory schematics and counts, unrouted inputs and " +
+        "resources and heads (too few or too many), programs ended or of the wrong length, factory schematics and counts, unrouted inputs and " +
         "outputs, factory input stock and idle factories). pi_plan_export writes the templates to the game's template " +
         "folder. Read-only.",
       inputSchema: {
