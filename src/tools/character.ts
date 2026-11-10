@@ -228,7 +228,7 @@ export function registerCharacterDataTools(server: McpServer, ctx: Ctx) {
       inputSchema: {
         items: z.array(z.union([z.string(), z.number()])).max(30).optional().describe("Item names or ids."),
         eft: z.string().optional().describe("An EFT fit to check as a whole."),
-        characters: z.array(z.string()).optional().describe("Characters to compare (default: the active character)."),
+        characters: z.array(z.string()).optional().describe("Characters to compare, or a character group name, e.g. ['Hauler alts'] (default: the active character)."),
       },
       annotations: READ_ONLY,
     },
@@ -247,7 +247,8 @@ export function registerCharacterDataTools(server: McpServer, ctx: Ctx) {
         for (const d of [...fit.drones, ...fit.fighters]) typeIds.push(d.type_id);
       }
       if (!typeIds.length) throw new UserError("Provide items and/or an EFT fit.");
-      const chars = (characters?.length ? characters : [undefined]).map((r) => ctx.character(r));
+      const picked = characters?.length ? ctx.characters(characters) : { characters: [ctx.character()], skipped: [] };
+      const chars = picked.characters;
       const results = await Promise.all(chars.map(async (c) => {
         const sk = await loadSkills(ctx.esi, c);
         const perItem = [...new Set(typeIds)].map((id) => {
@@ -278,6 +279,7 @@ export function registerCharacterDataTools(server: McpServer, ctx: Ctx) {
       return reply({
         checked: fitName ?? [...new Set(typeIds)].map((i) => sde.typeName(i)),
         note: "Training times use the attributes ESI reports for the character; boosters/accelerators are not modelled.",
+        not_logged_in: picked.skipped,
         results,
       });
     }),

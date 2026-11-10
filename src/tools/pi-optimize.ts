@@ -91,7 +91,7 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
             "Planet as numeral, number or full name; resource names may be shortened. Missing readings use default_abundance."),
         default_abundance: z.number().min(0).max(100).optional().describe("Reading assumed where none is given (default 50)."),
         characters: z.array(z.string()).max(50).optional()
-          .describe("Characters to plan for (default: every logged-in character with PI skills)."),
+          .describe("Characters or character groups to plan for (default: every logged-in character with PI skills)."),
         ignore_existing_colonies: z.boolean().optional()
           .describe("Plan every slot as if all colonies were abandoned (default false: free slots only)."),
         spare_command_centers: z.record(z.string(), z.number().int().min(0).max(100)).optional()
@@ -169,10 +169,11 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
       }
 
       // Colony slots of every PI-capable character.
-      const chars = a.characters?.length ? a.characters.map((r) => ctx.character(r)) : ctx.store.list();
+      const picked = a.characters?.length ? ctx.characters(a.characters) : { characters: ctx.store.list(), skipped: [] };
+      const chars = picked.characters;
       const info = await mapLimit(chars, 4, (c) => characterPi(ctx, sde, c, systemId));
       const slots: Slot[] = [];
-      const skipped: string[] = [];
+      const skipped: string[] = [...picked.skipped];
       for (const ci of info) {
         if (ci.max_colonies == null || !ci.max_command_center_level) {
           if (ci.note || a.characters?.length) skipped.push(`${ci.character}: ${ci.note ?? "no Command Center Upgrades"}`);

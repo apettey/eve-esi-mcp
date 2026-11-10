@@ -22,7 +22,9 @@ characters, corporations), so you rarely need to look ids up yourself.
 
 Characters: several EVE characters can be logged in. Character tools act as the active character unless you pass
 \`character\` (name or id). characters_list shows who is available; character_select changes the default;
-character_login adds/re-authorizes a character (opens the browser for EVE SSO).
+character_login adds/re-authorizes a character (opens the browser for EVE SSO). character_groups keeps the user's
+own named groups of characters (e.g. mirroring in-game access lists, which ESI can't read); a \`characters\` list
+accepts a group name and expands it to the members.
 
 Prefer the composite tools — they each replace many raw ESI calls:
 - character_overview: location, ship, wallet, SP/training, clones/implants, fatigue, LP in one call.

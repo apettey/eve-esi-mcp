@@ -16,10 +16,15 @@ import { READ_ONLY, handler, reply } from "./helpers.js";
 
 const day = (perHour: number) => isk(perHour * 24);
 
-/** Keep the colonies of the characters asked for (all when none). */
-function only(p: SavedPlan, characters?: string[]): SavedPlan {
+/** Keep the colonies of the characters asked for (all when none). A character group name expands to its members. */
+function only(ctx: Ctx, p: SavedPlan, characters?: string[]): SavedPlan {
   if (!characters?.length) return p;
-  const want = characters.map((c) => c.trim().toLowerCase());
+  const inPlan = new Set(p.colonies.map((c) => c.character.toLowerCase()));
+  const want = characters.flatMap((ref) => {
+    const r = ref.trim().toLowerCase();
+    const group = inPlan.has(r) && !/^group:/i.test(ref) ? undefined : ctx.groups.find(ref);
+    return group ? group.members.map((m) => m.name.toLowerCase()) : [r];
+  });
   const colonies = p.colonies.filter((c) => want.includes(c.character.toLowerCase()));
   if (!colonies.length) {
     throw new UserError(`The plan has no colonies for ${characters.join(", ")}. Characters in it: ${[...new Set(p.colonies.map((c) => c.character))].join(", ")}.`);
@@ -87,7 +92,7 @@ export function registerPiPlanTools(server: McpServer, ctx: Ctx) {
         "folder. Read-only.",
       inputSchema: {
         name: z.string().optional().describe("Plan name, e.g. 'Home no imports'. Omit to list saved plans."),
-        characters: z.array(z.string()).max(50).optional().describe("Only these characters' colonies."),
+        characters: z.array(z.string()).max(50).optional().describe("Only these characters' colonies (names or character group names)."),
         routine: z.boolean().optional().describe("Include the routine for every undock (default true)."),
         sheets: z.boolean().optional().describe("Include the build sheet per colony (default true)."),
         templates: z.boolean().optional().describe("Add each colony's template JSON as a text block, in colony order (default false)."),
@@ -109,7 +114,7 @@ export function registerPiPlanTools(server: McpServer, ctx: Ctx) {
       const sde = await ctx.sde();
       const pi = piData(sde);
       const full = loadPlan(ctx.cfg.home, a.name);
-      const p = only(full, a.characters);
+      const p = only(ctx, full, a.characters);
       if (a.check) return reply(await checkReply(ctx, sde, pi, p));
       const templates = colonyTemplates(sde, pi, pinCosts(sde), p);
       const h = haulPerTrip(sde, full);
@@ -170,7 +175,7 @@ export function registerPiPlanTools(server: McpServer, ctx: Ctx) {
         "template, then pick the colony's template.",
       inputSchema: {
         name: z.string().optional().describe("Plan name (default: the most recently saved plan)."),
-        characters: z.array(z.string()).max(50).optional().describe("Only these characters' colonies."),
+        characters: z.array(z.string()).max(50).optional().describe("Only these characters' colonies (names or character group names)."),
         folder: z.string().optional().describe("Folder for the templates (default: the EVE client's template folder)."),
         build_book: z.boolean().optional().describe("Also write '<plan name>.md' with every build sheet (default true)."),
       },
@@ -180,7 +185,7 @@ export function registerPiPlanTools(server: McpServer, ctx: Ctx) {
       const sde = await ctx.sde();
       const pi = piData(sde);
       const costs = pinCosts(sde);
-      const p = only(loadPlan(ctx.cfg.home, a.name), a.characters);
+      const p = only(ctx, loadPlan(ctx.cfg.home, a.name), a.characters);
       const folder = a.folder?.trim() || defaultTemplateFolder();
       const templates = colonyTemplates(sde, pi, costs, p);
       let replaced = 0;
