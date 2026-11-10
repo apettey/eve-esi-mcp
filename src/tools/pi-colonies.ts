@@ -26,7 +26,7 @@ export function registerPiColonyTools(server: McpServer, ctx: Ctx) {
         "Use pi_optimize to plan colonies.",
       inputSchema: {
         character: characterParam,
-        characters: z.array(z.string()).max(50).optional().describe("Several characters (default: every logged-in character)."),
+        characters: z.array(z.string()).max(50).optional().describe("Several characters, or a character group name (default: every logged-in character)."),
         system: z.string().optional().describe("Only colonies in this system, e.g. 'J163701'."),
         include_storage: z.boolean().optional().describe("List storage contents per colony (default false)."),
         warn_hours: z.number().min(1).max(336).optional().describe("Flag extractors ending and storage filling within this many hours (default 24)."),
@@ -38,15 +38,17 @@ export function registerPiColonyTools(server: McpServer, ctx: Ctx) {
       const pi = piData(sde);
       const now = Date.now();
       const warnMs = (warn_hours ?? 24) * 3_600_000;
-      const chars: StoredCharacter[] = character
-        ? [ctx.character(character)]
+      const picked = character
+        ? { characters: [ctx.character(character)], skipped: [] }
         : characters?.length
-          ? characters.map((r) => ctx.character(r))
-          : ctx.store.list();
-      if (!chars.length) ctx.character(); // throws the "log in first" error
+          ? ctx.characters(characters)
+          : { characters: ctx.store.list(), skipped: [] };
+      const chars: StoredCharacter[] = picked.characters;
+      if (!chars.length && !picked.skipped.length) ctx.character(); // throws the "log in first" error
       const systemId = system ? (sde.systemIdByName(system) ?? Number(system)) : null;
 
       const unavailable: Record<string, string> = {};
+      for (const s of picked.skipped) unavailable[s] = "not logged in";
       const attention: Array<{ at: number; text: string }> = [];
       const perChar = await mapLimit(chars, 3, async (c) => {
         let colonies: any[];

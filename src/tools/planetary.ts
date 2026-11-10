@@ -122,7 +122,7 @@ export function registerPlanetaryTools(server: McpServer, ctx: Ctx) {
         system: z.string().optional().describe("System name or id, e.g. 'J123456' or 'Jita'. Default: the character's current system."),
         character: characterParam,
         characters: z.array(z.string()).max(50).optional()
-          .describe("Characters whose colonies and slots to include (default: every logged-in character)."),
+          .describe("Characters or character groups whose colonies and slots to include (default: every logged-in character)."),
         extra_planet_types: z.array(z.string()).max(8).optional()
           .describe("What-if: planet types to add, e.g. ['Plasma'] for planets reachable through a static connection."),
         include_characters: z.boolean().optional().describe("Include characters' colonies and slots (default true)."),
@@ -174,8 +174,11 @@ export function registerPlanetaryTools(server: McpServer, ctx: Ctx) {
       oneShort.sort();
 
       let charactersOut: CharacterPi[] | undefined;
+      let notLoggedIn: string[] = [];
       if (include_characters !== false) {
-        const chars = characters?.length ? characters.map((r) => ctx.character(r)) : ctx.store.list();
+        const picked = characters?.length ? ctx.characters(characters) : { characters: ctx.store.list(), skipped: [] };
+        notLoggedIn = picked.skipped;
+        const chars = picked.characters;
         charactersOut = await mapLimit(chars, 4, (c) => characterPi(ctx, sde, c, systemId));
       }
       // Characters without Command Center Upgrades can only run a level 0 command center (1 extractor at most), so
@@ -202,6 +205,7 @@ export function registerPlanetaryTools(server: McpServer, ctx: Ctx) {
         characters: pilots,
         free_colony_slots_total: free,
         no_pi_skills: untrained?.length ? untrained : undefined,
+        not_logged_in: notLoggedIn,
         note: "Planets of the same type differ in resource abundance, which ESI does not expose. Scan in game before placing extractors.",
       });
     }),
