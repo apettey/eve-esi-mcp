@@ -8,10 +8,24 @@ export interface GroupMember {
   name: string;
 }
 
+/** An in-game access list a group follows: its members are re-read from ESI whenever the group is used. */
+export interface AccessListLink {
+  id: number;
+  name: string;
+  /** The character whose token reads the list (a Manager or Admin of it, with esi-access.read_lists.v1). */
+  via: GroupMember;
+  /** Characters on the list who are not part of the group (e.g. the main that administers every list). */
+  exclude?: GroupMember[];
+  /** Corporations and alliances on the list; they can't be expanded to characters, so they're only reported. */
+  others?: string[];
+  synced_at?: string;
+}
+
 export interface CharacterGroup {
   name: string;
   note?: string;
   members: GroupMember[];
+  access_list?: AccessListLink;
   updated_at: string;
 }
 
@@ -20,8 +34,9 @@ interface GroupFile {
 }
 
 /**
- * The user's own character groups (e.g. mirroring in-game access lists, which ESI cannot read), in groups.json in
- * the data directory. Kept apart from characters.json so token writes and group edits never race on one file.
+ * The user's own character groups, in groups.json in the data directory: kept by hand, or following an in-game
+ * access list (see src/access-lists.ts). Kept apart from characters.json so token writes and group edits never race
+ * on one file.
  */
 export class GroupStore {
   private data: GroupFile = { groups: {} };

@@ -120,12 +120,12 @@ test("a group keeps members who log out, and character lists expand groups to lo
   await callTool(ctx, "character_logout", { character: "Carol Hauler" });
 
   const list = await callTool(ctx, "character_groups", { group: "miners" });
-  assert.deepEqual(list.json.members, ["Alice Alt", "Carol Hauler (not logged in)"]);
+  assert.deepEqual(list.json.members, ["Alice Alt", "Carol Hauler (not logged in here)"]);
 
-  const picked = ctx.characters(["Miners", "Bob Main"]);
+  const picked = await ctx.characters(["Miners", "Bob Main"]);
   assert.deepEqual(picked.characters.map((c) => c.name), ["Alice Alt", "Bob Main"]);
   assert.deepEqual(picked.skipped, ["Carol Hauler (in group Miners, not logged in)"]);
-  assert.throws(() => ctx.characters(["group:Nope"]), /No character group "Nope".*Miners/);
+  await assert.rejects(ctx.characters(["group:Nope"]), /No character group "Nope".*Miners/);
 
   // A logged-out member can still be removed by name.
   const removed = await callTool(ctx, "character_groups", { action: "remove", group: "Miners", characters: ["Carol Hauler"] });
@@ -136,8 +136,8 @@ test("an exact character name wins over a group of the same name", async () => {
   const ctx = testCtx({ characters: [ALICE, BOB] });
   ctx.groups.create("Bob Main");
   ctx.groups.update("Bob Main", (g) => { g.members = [{ id: ALICE.id, name: ALICE.name }]; });
-  assert.deepEqual(ctx.characters(["Bob Main"]).characters.map((c) => c.name), ["Bob Main"]);
-  assert.deepEqual(ctx.characters(["group:Bob Main"]).characters.map((c) => c.name), ["Alice Alt"]);
+  assert.deepEqual((await ctx.characters(["Bob Main"])).characters.map((c) => c.name), ["Bob Main"]);
+  assert.deepEqual((await ctx.characters(["group:Bob Main"])).characters.map((c) => c.name), ["Alice Alt"]);
 });
 
 withSde("characters_list shows each character's groups", async () => {

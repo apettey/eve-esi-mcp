@@ -33,6 +33,7 @@ export const STANDARD_SCOPES = [
   "esi-ui.write_waypoint.v1",
   "esi-ui.open_window.v1",
   "esi-fleets.read_fleet.v1",
+  "esi-access.read_lists.v1", // access lists the character manages (character_groups link)
 ];
 
 export const READONLY_SCOPES = STANDARD_SCOPES.filter(
@@ -42,7 +43,6 @@ export const READONLY_SCOPES = STANDARD_SCOPES.filter(
 export const FULL_SCOPES = [
   ...new Set([
     ...STANDARD_SCOPES,
-    "esi-access.read_lists.v1",
     "esi-activities.read_character.v1",
     "esi-alliances.read_contacts.v1",
     "esi-assets.read_corporation_assets.v1",
