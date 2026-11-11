@@ -46,8 +46,9 @@ decimal: the client rejects an integer). Next:
 - Alpha/omega: ESI has no clone-state field. `character_overview` and `character_skills` infer it from training
   speed (alphas train at 50%) and from skills capped below their trained level. A character with a paused or empty
   queue and no capped skills gets no verdict.
-- Access lists: ESI has no access-list routes, so `character_groups` are kept by hand and aren't synced with the
-  in-game lists. Groups hold only logged-in characters (members who log out stay, shown as not logged in).
+- Access lists: ESI can read them (compatibility date 2026-05-19) but not edit them, so `character_groups` follow a
+  list and can't change it. ESI only shows lists the reading character is a Manager or Admin of. Corporations and
+  alliances on a list are reported, not expanded to their characters. Tools use only members who are logged in here.
 - Skill queues are read-only in ESI, so plans (e.g. from `skill_check`) have to be pasted into the client by hand.
 - Doctrine tools: saved battle reports (`br.evetools.org/br/...` and `/battle/...`, `zkillboard.com/br/...`) aren't
   read. Only related links, or system + time, are. br.evetools.org has no documented public API, so reading saved

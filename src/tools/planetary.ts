@@ -175,9 +175,11 @@ export function registerPlanetaryTools(server: McpServer, ctx: Ctx) {
 
       let charactersOut: CharacterPi[] | undefined;
       let notLoggedIn: string[] = [];
+      let groupWarnings: string[] = [];
       if (include_characters !== false) {
-        const picked = characters?.length ? ctx.characters(characters) : { characters: ctx.store.list(), skipped: [] };
+        const picked = characters?.length ? await ctx.characters(characters) : { characters: ctx.store.list(), skipped: [], warnings: [] };
         notLoggedIn = picked.skipped;
+        groupWarnings = picked.warnings;
         const chars = picked.characters;
         charactersOut = await mapLimit(chars, 4, (c) => characterPi(ctx, sde, c, systemId));
       }
@@ -206,6 +208,7 @@ export function registerPlanetaryTools(server: McpServer, ctx: Ctx) {
         free_colony_slots_total: free,
         no_pi_skills: untrained?.length ? untrained : undefined,
         not_logged_in: notLoggedIn,
+        group_warnings: groupWarnings,
         note: "Planets of the same type differ in resource abundance, which ESI does not expose. Scan in game before placing extractors.",
       });
     }),

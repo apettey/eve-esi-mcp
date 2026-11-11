@@ -12,7 +12,7 @@ An [MCP](https://modelcontextprotocol.io) server for EVE Online's [ESI API](http
 
 | Area | Tools |
 | --- | --- |
-| Characters | `characters_list`, `character_login`, `character_select`, `character_logout`, `character_groups` (your own named groups of characters, e.g. mirroring in-game access lists; a group name works anywhere a `characters` list is taken) |
+| Characters | `characters_list`, `character_login`, `character_select`, `character_logout`, `character_groups` (named groups of characters such as "mains" or "deployment 1": linked to an in-game access list, re-read from ESI whenever a group is used, or kept by hand; a group name works anywhere a `characters` list is taken) |
 | Character data | `character_overview` (location, ship, wallet, SP and training, alpha/omega, clones, implants, fatigue, LP), `character_skills`, `skill_check` |
 | Assets | `assets` (summary / search / ships), `ship_fitting` (EFT of a real ship; defaults to the one being flown) |
 | Fittings | `fittings_list`, `fitting_get`, `fitting_analyze` (any EFT), `fitting_save`, `fitting_delete` |
@@ -106,7 +106,7 @@ The masses come from static data, so check them in game or in Pyfa before relyin
 
 1. Go to <https://developers.eveonline.com/applications> and create an application.
 2. Set the **Callback URL** to `http://localhost:8642/callback`.
-3. Under **Scopes**, add the scopes you want to allow. The default `standard` preset needs the scopes in [`src/auth/scopes.ts`](src/auth/scopes.ts). Enable more if you plan to log in with the `full` preset (which adds corporation scopes).
+3. Under **Scopes**, add the scopes you want to allow. The default `standard` preset needs the scopes in [`src/auth/scopes.ts`](src/auth/scopes.ts). Enable more if you plan to log in with the `full` preset (which adds corporation scopes). `esi-access.read_lists.v1` (access lists, for `character_groups`) joined the standard preset later: characters logged in before need to log in again for it.
 4. Copy the **Client ID**. You don't need the secret, because the server uses PKCE.
 
 ### 2. Install

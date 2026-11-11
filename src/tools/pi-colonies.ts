@@ -39,10 +39,10 @@ export function registerPiColonyTools(server: McpServer, ctx: Ctx) {
       const now = Date.now();
       const warnMs = (warn_hours ?? 24) * 3_600_000;
       const picked = character
-        ? { characters: [ctx.character(character)], skipped: [] }
+        ? { characters: [ctx.character(character)], skipped: [], warnings: [] }
         : characters?.length
-          ? ctx.characters(characters)
-          : { characters: ctx.store.list(), skipped: [] };
+          ? await ctx.characters(characters)
+          : { characters: ctx.store.list(), skipped: [], warnings: [] };
       const chars: StoredCharacter[] = picked.characters;
       if (!chars.length && !picked.skipped.length) ctx.character(); // throws the "log in first" error
       const systemId = system ? (sde.systemIdByName(system) ?? Number(system)) : null;
@@ -174,6 +174,7 @@ export function registerPiColonyTools(server: McpServer, ctx: Ctx) {
         attention: attention.length ? attention.map((x) => x.text) : ["nothing needs attention"],
         planets,
         unavailable: Object.keys(unavailable).length ? unavailable : undefined,
+        group_warnings: picked.warnings,
         note: planets.length && planets.some((p) => p.extractors.length)
           ? "Extractor output uses ESI's qty_per_cycle with the community decay curve (not an official formula)."
           : undefined,

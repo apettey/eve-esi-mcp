@@ -169,11 +169,11 @@ export function registerPiOptimizeTool(server: McpServer, ctx: Ctx) {
       }
 
       // Colony slots of every PI-capable character.
-      const picked = a.characters?.length ? ctx.characters(a.characters) : { characters: ctx.store.list(), skipped: [] };
+      const picked = a.characters?.length ? await ctx.characters(a.characters) : { characters: ctx.store.list(), skipped: [], warnings: [] };
       const chars = picked.characters;
       const info = await mapLimit(chars, 4, (c) => characterPi(ctx, sde, c, systemId));
       const slots: Slot[] = [];
-      const skipped: string[] = [...picked.skipped];
+      const skipped: string[] = [...picked.skipped, ...picked.warnings];
       for (const ci of info) {
         if (ci.max_colonies == null || !ci.max_command_center_level) {
           if (ci.note || a.characters?.length) skipped.push(`${ci.character}: ${ci.note ?? "no Command Center Upgrades"}`);

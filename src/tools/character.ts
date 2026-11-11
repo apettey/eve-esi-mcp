@@ -247,7 +247,7 @@ export function registerCharacterDataTools(server: McpServer, ctx: Ctx) {
         for (const d of [...fit.drones, ...fit.fighters]) typeIds.push(d.type_id);
       }
       if (!typeIds.length) throw new UserError("Provide items and/or an EFT fit.");
-      const picked = characters?.length ? ctx.characters(characters) : { characters: [ctx.character()], skipped: [] };
+      const picked = characters?.length ? await ctx.characters(characters) : { characters: [ctx.character()], skipped: [], warnings: [] };
       const chars = picked.characters;
       const results = await Promise.all(chars.map(async (c) => {
         const sk = await loadSkills(ctx.esi, c);
@@ -280,6 +280,7 @@ export function registerCharacterDataTools(server: McpServer, ctx: Ctx) {
         checked: fitName ?? [...new Set(typeIds)].map((i) => sde.typeName(i)),
         note: "Training times use the attributes ESI reports for the character; boosters/accelerators are not modelled.",
         not_logged_in: picked.skipped,
+        group_warnings: picked.warnings,
         results,
       });
     }),

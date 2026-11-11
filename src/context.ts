@@ -7,6 +7,7 @@ import { Zkill } from "./zkill.js";
 import { SdeManager } from "./sde/manager.js";
 import type { Sde } from "./sde/db.js";
 import { GroupStore } from "./auth/groups.js";
+import { syncGroup } from "./access-lists.js";
 import { UserError, norm } from "./util.js";
 
 /** Shared services handed to every tool. */
@@ -44,17 +45,24 @@ export class Ctx {
 
   /**
    * Resolves a list of character references where any entry may also name a character group (exactly, or as
-   * "group:Name"); groups expand to their logged-in members. Deduplicated, in order. Members who are no longer
-   * logged in are returned in `skipped` so tools can say so instead of failing.
+   * "group:Name"); groups expand to their logged-in members, and a group that follows an in-game access list is
+   * re-read from ESI first. Deduplicated, in order. Members who aren't logged in here are returned in `skipped`, and
+   * access lists that couldn't be read in `warnings`, so tools can say so instead of failing.
    */
-  characters(refs: Array<string | number>): { characters: StoredCharacter[]; skipped: string[] } {
+  async characters(refs: Array<string | number>): Promise<{ characters: StoredCharacter[]; skipped: string[]; warnings: string[] }> {
     const out = new Map<number, StoredCharacter>();
     const skipped: string[] = [];
+    const warnings: string[] = [];
     for (const ref of refs) {
       const s = String(ref);
       const isExplicit = /^\s*group:/i.test(s);
-      const group = isExplicit || !this.isExactCharacter(s) ? this.groups.find(s) : undefined;
+      let group = isExplicit || !this.isExactCharacter(s) ? this.groups.find(s) : undefined;
       if (isExplicit && !group) this.groups.get(s); // throws, listing the groups
+      if (group?.access_list) {
+        const synced = await syncGroup(this, group);
+        group = synced.group;
+        if (synced.warning) warnings.push(synced.warning);
+      }
       if (group) {
         if (!group.members.length) throw new UserError(`Character group "${group.name}" has no members.`);
         for (const m of group.members) {
@@ -67,7 +75,7 @@ export class Ctx {
         out.set(c.id, c);
       }
     }
-    return { characters: [...out.values()], skipped };
+    return { characters: [...out.values()], skipped, warnings };
   }
 
   private isExactCharacter(ref: string): boolean {

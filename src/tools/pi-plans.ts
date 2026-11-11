@@ -7,6 +7,7 @@ import { piData, tierName, type PiData } from "../pi.js";
 import type { Sde } from "../sde/db.js";
 import { checkPlan, type ActualColonies } from "../pi-check.js";
 import { pinCosts } from "../pi-layout.js";
+import { syncGroup } from "../access-lists.js";
 import {
   colonySheet, colonyTemplates, defaultTemplateFolder, haulLine, haulPerTrip, listPlans, loadPlan, planMarkdown, routine, type SavedPlan,
 } from "../pi-plan.js";
@@ -17,14 +18,16 @@ import { READ_ONLY, handler, reply } from "./helpers.js";
 const day = (perHour: number) => isk(perHour * 24);
 
 /** Keep the colonies of the characters asked for (all when none). A character group name expands to its members. */
-function only(ctx: Ctx, p: SavedPlan, characters?: string[]): SavedPlan {
+async function only(ctx: Ctx, p: SavedPlan, characters?: string[]): Promise<SavedPlan> {
   if (!characters?.length) return p;
   const inPlan = new Set(p.colonies.map((c) => c.character.toLowerCase()));
-  const want = characters.flatMap((ref) => {
+  const want: string[] = [];
+  for (const ref of characters) {
     const r = ref.trim().toLowerCase();
-    const group = inPlan.has(r) && !/^group:/i.test(ref) ? undefined : ctx.groups.find(ref);
-    return group ? group.members.map((m) => m.name.toLowerCase()) : [r];
-  });
+    let group = inPlan.has(r) && !/^group:/i.test(ref) ? undefined : ctx.groups.find(ref);
+    if (group?.access_list) group = (await syncGroup(ctx, group)).group;
+    want.push(...(group ? group.members.map((m) => m.name.toLowerCase()) : [r]));
+  }
   const colonies = p.colonies.filter((c) => want.includes(c.character.toLowerCase()));
   if (!colonies.length) {
     throw new UserError(`The plan has no colonies for ${characters.join(", ")}. Characters in it: ${[...new Set(p.colonies.map((c) => c.character))].join(", ")}.`);
@@ -114,7 +117,7 @@ export function registerPiPlanTools(server: McpServer, ctx: Ctx) {
       const sde = await ctx.sde();
       const pi = piData(sde);
       const full = loadPlan(ctx.cfg.home, a.name);
-      const p = only(ctx, full, a.characters);
+      const p = await only(ctx, full, a.characters);
       if (a.check) return reply(await checkReply(ctx, sde, pi, p));
       const templates = colonyTemplates(sde, pi, pinCosts(sde), p);
       const h = haulPerTrip(sde, full);
@@ -185,7 +188,7 @@ export function registerPiPlanTools(server: McpServer, ctx: Ctx) {
       const sde = await ctx.sde();
       const pi = piData(sde);
       const costs = pinCosts(sde);
-      const p = only(ctx, loadPlan(ctx.cfg.home, a.name), a.characters);
+      const p = await only(ctx, loadPlan(ctx.cfg.home, a.name), a.characters);
       const folder = a.folder?.trim() || defaultTemplateFolder();
       const templates = colonyTemplates(sde, pi, costs, p);
       let replaced = 0;
