@@ -67,14 +67,15 @@ export function checkColony(sde: Sde, pi: PiData, plan: SavedPlan, c: PlanColony
     have.set(e.product, [...(have.get(e.product) ?? []), e]);
   }
   const headParts: string[] = [];
+  // Extra heads only matter when they take the CPU/PG the planned factories need (every head costs 550 MW).
+  const factoriesShort = c.layout.factories.some((f) => (a.factories.get(f.product) ?? 0) < f.count);
   for (const [res, w] of want) {
     const got = have.get(res) ?? [];
     const heads = sum(got.map((e) => e.heads));
     if (!got.length) { issues.push(`no ${name(res)} extractor`); continue; }
     if (got.length < w.count) issues.push(`${got.length} of ${w.count} ${name(res)} extractors`);
     if (heads < w.heads) issues.push(`${name(res)} ${heads} of ${w.heads} heads`);
-    // Extra heads use the CPU/PG the planned factories need (every head costs 550 MW).
-    if (heads > w.heads) issues.push(`${name(res)} ${heads} heads, plan ${w.heads}: remove ${heads - w.heads} so the factories fit`);
+    if (heads > w.heads && factoriesShort) issues.push(`${name(res)} ${heads} heads, plan ${w.heads}: remove ${heads - w.heads} so the factories fit`);
     headParts.push(`${name(res)} ${heads}`);
   }
   for (const [res, got] of have) if (!want.has(res)) issues.push(`extracts ${name(res)} (${got.length}), not in the plan`);

@@ -86,9 +86,14 @@ withSde("the plan check says per colony what differs from the plan", () => {
     "Precious Metals from 1 factory isn't routed anywhere",
   ]);
   assert.deepEqual(checkColony(sde!, f.pi, f.plan, f.extraction, null, null, NOW).issues, ["not built yet"]);
-  // More heads than planned use the power the planned factories need.
-  const over = checkColony(sde!, f.pi, f.plan, f.extraction, f.extractionLayout({ heads: [10, 8] }), 5, NOW);
-  assert.deepEqual(over.issues, ["Noble Metals 18 heads, plan 16: remove 2 so the factories fit"]);
+  // More heads than planned are only a problem when they cost planned factories.
+  const extra = checkColony(sde!, f.pi, f.plan, f.extraction, f.extractionLayout({ heads: [10, 8] }), 5, NOW);
+  assert.deepEqual(extra.issues, [], "every planned factory is there: the extra head is free output");
+  const crowded = f.extractionLayout({ heads: [10, 8] });
+  crowded.pins = crowded.pins.filter((p: any) => p.pin_id !== 3);
+  crowded.routes = crowded.routes.filter((r: any) => r.source_pin_id !== 3 && r.destination_pin_id !== 3);
+  assert.deepEqual(checkColony(sde!, f.pi, f.plan, f.extraction, crowded, 5, NOW).issues,
+    ["Noble Metals 18 heads, plan 16: remove 2 so the factories fit", "1 of 2 Precious Metals factories"]);
 
   // Factory colonies: less than a day of inputs on hand says what to bring for the restock period.
   const empty = checkColony(sde!, f.pi, f.plan, f.factory, f.factoryLayout(0), 5, NOW);
