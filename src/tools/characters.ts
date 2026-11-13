@@ -57,8 +57,10 @@ export function registerCharacterTools(server: McpServer, ctx: Ctx) {
     {
       title: "Authorize an EVE character",
       description:
-        "Starts EVE SSO login. Opens the user's browser (and returns the URL) so they can pick a character and approve scopes; " +
-        "waits for completion up to wait_seconds. Use again to add more characters or to re-authorize with more scopes. " +
+        "Starts or completes EVE SSO login. Opens the user's browser (and returns the URL) so they can pick a character and approve scopes; " +
+        "waits for completion up to wait_seconds. If the user's browser is on another machine and cannot reach localhost after authorizing, " +
+        "pass the redirect URL from their browser address bar as callback_url to complete the pending login. " +
+        "Use again to add more characters or to re-authorize with more scopes. " +
         "Scope presets: 'standard' (default: personal data read + fittings/mail/waypoint write), 'readonly', 'full' (adds corporation scopes).",
       inputSchema: {
         scopes: z
@@ -66,10 +68,24 @@ export function registerCharacterTools(server: McpServer, ctx: Ctx) {
           .optional()
           .describe("Preset name or explicit list of ESI scopes."),
         wait_seconds: z.number().int().min(0).max(300).optional().describe("How long to wait for the user to finish (default 120)."),
+        callback_url: z
+          .string()
+          .optional()
+          .describe("Redirect URL (or authorization code) pasted from the user's browser when authenticating on a remote device that cannot reach localhost."),
       },
       annotations: { openWorldHint: true },
     },
-    handler(async ({ scopes, wait_seconds }) => {
+    handler(async ({ scopes, wait_seconds, callback_url }) => {
+      const authorized = (c: { id: number; name: string; scopes: string[] }) =>
+        reply({
+          status: "authorized",
+          character: c.name,
+          character_id: c.id,
+          scopes_granted: c.scopes.length,
+          active: ctx.store.activeId === c.id,
+          hint: ctx.store.activeId === c.id ? undefined : "Use character_select to make this character active.",
+        });
+      if (callback_url) return authorized(await ctx.sso.completeLogin(callback_url));
       const list = Array.isArray(scopes) ? scopes : SCOPE_PRESETS[scopes ?? ""] ?? ctx.cfg.defaultScopes ?? SCOPE_PRESETS.standard;
       const login = await ctx.sso.startLogin(list);
       const opened = ctx.sso.openBrowser(login.url);
@@ -80,23 +96,15 @@ export function registerCharacterTools(server: McpServer, ctx: Ctx) {
       ]).catch((err: Error) => {
         throw new UserError(`Login failed: ${err.message}`);
       });
-      if (result.ok) {
-        return reply({
-          status: "authorized",
-          character: result.c.name,
-          character_id: result.c.id,
-          scopes_granted: result.c.scopes.length,
-          active: ctx.store.activeId === result.c.id,
-          hint: ctx.store.activeId === result.c.id ? undefined : "Use character_select to make this character active.",
-        });
-      }
+      if (result.ok) return authorized(result.c);
       return reply({
         status: "pending",
         browser_opened: opened,
         login_url: login.url,
         message:
           "Ask the user to open the login URL (if the browser did not open), choose a character and authorize. " +
-          "The login stays valid for 10 minutes; call characters_list afterwards to confirm.",
+          "The login stays valid for 10 minutes; call characters_list afterwards to confirm. " +
+          "If the browser is on a different machine and cannot reach localhost after authorizing, ask the user to paste the redirect URL from their browser address bar and call character_login with callback_url.",
       });
     }),
   );

@@ -1,6 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const pkg = JSON.parse(
@@ -33,11 +33,28 @@ function env(name: string): string | undefined {
   return v && v.trim() ? v.trim() : undefined;
 }
 
+export function reloadSsoConfig(cfg: Config): void {
+  const ssoPath = join(cfg.home, "sso.json");
+  if (!existsSync(ssoPath)) return;
+  try {
+    const ssoFile = JSON.parse(readFileSync(ssoPath, "utf8")) as {
+      clientId?: string;
+      clientSecret?: string;
+      callbackUrl?: string;
+    };
+    if (!env("EVE_CLIENT_ID") && ssoFile.clientId) cfg.clientId = ssoFile.clientId.trim();
+    if (!env("EVE_CLIENT_SECRET") && ssoFile.clientSecret) cfg.clientSecret = ssoFile.clientSecret.trim();
+    if (!env("EVE_CALLBACK_URL") && ssoFile.callbackUrl) cfg.callbackUrl = ssoFile.callbackUrl.trim();
+  } catch {
+    // ignore invalid sso.json
+  }
+}
+
 export function loadConfig(): Config {
   const home = env("EVE_ESI_MCP_HOME") ?? join(homedir(), ".eve-esi-mcp");
   mkdirSync(home, { recursive: true });
   const contact = env("EVE_CONTACT");
-  return {
+  const cfg: Config = {
     home,
     clientId: env("EVE_CLIENT_ID"),
     clientSecret: env("EVE_CLIENT_SECRET"),
@@ -47,6 +64,8 @@ export function loadConfig(): Config {
     defaultScopes: env("EVE_SCOPES")?.split(/[\s,]+/).filter(Boolean),
     openBrowser: env("EVE_OPEN_BROWSER") !== "false",
   };
+  reloadSsoConfig(cfg);
+  return cfg;
 }
 
 /** Major trade hubs, used as defaults for market tools. */
