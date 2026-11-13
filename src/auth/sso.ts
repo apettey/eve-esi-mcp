@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { spawn } from "node:child_process";
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from "jose";
-import { SSO_METADATA_URL, type Config } from "../config.js";
+import { SSO_METADATA_URL, reloadSsoConfig, type Config } from "../config.js";
 import { UserError, log } from "../util.js";
 import type { CharacterStore, StoredCharacter } from "./store.js";
 
@@ -48,14 +48,17 @@ export class Sso {
   constructor(private cfg: Config, private store: CharacterStore) {}
 
   get configured(): boolean {
+    if (!this.cfg.clientId) reloadSsoConfig(this.cfg);
     return !!this.cfg.clientId;
   }
 
   private requireClient(): string {
+    if (!this.cfg.clientId) reloadSsoConfig(this.cfg);
     if (!this.cfg.clientId) {
       throw new UserError(
         "EVE_CLIENT_ID is not set. Register an application at https://developers.eveonline.com/applications " +
-          `with callback URL ${this.cfg.callbackUrl}, then set EVE_CLIENT_ID (and optionally EVE_CLIENT_SECRET) in the MCP server environment.`,
+          `with callback URL ${this.cfg.callbackUrl}, then set EVE_CLIENT_ID (and optionally EVE_CLIENT_SECRET) in the MCP server environment ` +
+          `or save {"clientId": "...", "callbackUrl": "..."} to ${this.cfg.home}/sso.json.`,
       );
     }
     return this.cfg.clientId;
@@ -172,6 +175,43 @@ export class Sso {
     }
   }
 
+  /** Completes a pending login from a callback URL or authorization code. */
+  async completeLogin(callbackUrlOrCode: string, stateParam?: string): Promise<StoredCharacter> {
+    const raw = callbackUrlOrCode.trim();
+    let code = raw;
+    let state = stateParam?.trim() ?? "";
+    if (raw.includes("://") || raw.startsWith("/") || raw.includes("code=")) {
+      try {
+        const parsed = new URL(raw.startsWith("http") ? raw : `http://localhost/${raw.replace(/^\//, "")}`);
+        code = parsed.searchParams.get("code") ?? "";
+        state = parsed.searchParams.get("state") ?? state;
+      } catch {
+        // treat as raw code
+      }
+    }
+    const p = state
+      ? this.pending.get(state)
+      : this.pending.size === 1
+        ? [...this.pending.values()][0]
+        : undefined;
+    if (!p || !code) {
+      throw new UserError("Unknown or expired login request. Start the login again from your AI assistant.");
+    }
+    this.pending.delete(p.state);
+    try {
+      const tokens = await this.tokenRequest({ grant_type: "authorization_code", code, code_verifier: p.verifier });
+      const character = await this.characterFromTokens(tokens);
+      this.store.upsert(character);
+      p.resolve(character);
+      return character;
+    } catch (err) {
+      p.reject(err as Error);
+      throw err;
+    } finally {
+      this.maybeCloseServer();
+    }
+  }
+
   private async ensureServer() {
     if (this.server) return;
     const cb = new URL(this.cfg.callbackUrl);
@@ -184,27 +224,14 @@ export class Sso {
         res.writeHead(404).end("Not found");
         return;
       }
-      const state = url.searchParams.get("state") ?? "";
-      const code = url.searchParams.get("code");
-      const p = this.pending.get(state);
-      if (!p || !code) {
-        res.writeHead(400, { "Content-Type": "text/html" }).end(page("Login failed", "Unknown or expired login request. Start the login again from your AI assistant."));
-        return;
-      }
-      this.pending.delete(state);
       try {
-        const tokens = await this.tokenRequest({ grant_type: "authorization_code", code, code_verifier: p.verifier });
-        const character = await this.characterFromTokens(tokens);
-        this.store.upsert(character);
+        const character = await this.completeLogin(url.toString());
         res.writeHead(200, { "Content-Type": "text/html" }).end(
           page("Character authorized", `<b>${escapeHtml(character.name)}</b> is now available to your AI assistant. You can close this tab.`),
         );
-        p.resolve(character);
       } catch (err) {
-        res.writeHead(500, { "Content-Type": "text/html" }).end(page("Login failed", escapeHtml((err as Error).message)));
-        p.reject(err as Error);
-      } finally {
-        this.maybeCloseServer();
+        const status = err instanceof UserError ? 400 : 500;
+        res.writeHead(status, { "Content-Type": "text/html" }).end(page("Login failed", escapeHtml((err as Error).message)));
       }
     });
     const port = Number(cb.port || 80);

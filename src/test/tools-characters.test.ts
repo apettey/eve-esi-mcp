@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { Sso } from "../auth/sso.js";
 import { callTool, character, connect, testCtx, withSde } from "./harness.js";
 
 const ALICE = character(90000001, "Alice Alt");
@@ -147,4 +150,49 @@ withSde("characters_list shows each character's groups", async () => {
   assert.equal(r.isError, false, r.text);
   assert.deepEqual(r.json.characters.find((c: any) => c.name === "Alice Alt").groups, ["Scouts"]);
   assert.equal(r.json.characters.find((c: any) => c.name === "Bob Main").groups, undefined);
+});
+
+test("character_login completes a pending login via callback_url and hot-reloads sso.json", async () => {
+  const ctx = testCtx();
+  ctx.cfg.callbackUrl = "http://127.0.0.1:0/callback";
+  const sso = new Sso(ctx.cfg, ctx.store);
+  (ctx as any).sso = sso;
+
+  assert.equal(sso.configured, false);
+  writeFileSync(
+    join(ctx.cfg.home, "sso.json"),
+    JSON.stringify({ clientId: "test-client-id", callbackUrl: "http://127.0.0.1:0/callback" }),
+  );
+  assert.equal(sso.configured, true);
+  assert.equal(ctx.cfg.clientId, "test-client-id");
+
+  (sso as any).meta = async () => ({
+    authorization_endpoint: "https://login.eveonline.com/v2/oauth/authorize",
+    token_endpoint: "https://login.eveonline.com/v2/oauth/token",
+    jwks_uri: "https://login.eveonline.com/oauth/jwks",
+    revocation_endpoint: "https://login.eveonline.com/v2/oauth/revoke",
+  });
+  let verifier = "";
+  (sso as any).tokenRequest = async (params: Record<string, string>) => {
+    assert.equal(params.grant_type, "authorization_code");
+    assert.equal(params.code, "remote-auth-code");
+    verifier = params.code_verifier;
+    return { access_token: "fake-jwt", expires_in: 1200, refresh_token: "refresh-xyz" };
+  };
+  (sso as any).characterFromTokens = async () => ALICE;
+
+  const pending = await callTool(ctx, "character_login", { wait_seconds: 0 });
+  assert.equal(pending.isError, false, pending.text);
+  assert.equal(pending.json.status, "pending");
+  const state = new URL(pending.json.login_url).searchParams.get("state");
+  assert.ok(state);
+
+  const done = await callTool(ctx, "character_login", {
+    callback_url: `http://127.0.0.1:8642/callback?code=remote-auth-code&state=${encodeURIComponent(state)}`,
+  });
+  assert.equal(done.isError, false, done.text);
+  assert.equal(done.json.status, "authorized");
+  assert.equal(done.json.character, "Alice Alt");
+  assert.ok(verifier.length >= 32);
+  assert.equal(ctx.store.get(ALICE.id)?.name, "Alice Alt");
 });
