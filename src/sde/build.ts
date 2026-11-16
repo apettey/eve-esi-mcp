@@ -13,7 +13,7 @@ import { log } from "../util.js";
  * Only the datasets the tools need are imported; localized strings keep English only.
  */
 
-export const SDE_SCHEMA_VERSION = 6;
+export const SDE_SCHEMA_VERSION = 7;
 
 const SCHEMA = `
 CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
@@ -32,6 +32,13 @@ CREATE INDEX types_group ON types (group_id);
 CREATE INDEX types_variation ON types (variation_parent_id);
 CREATE TABLE type_attributes (type_id INTEGER, attribute_id INTEGER, value REAL, PRIMARY KEY (type_id, attribute_id)) WITHOUT ROWID;
 CREATE TABLE type_bonus (type_id INTEGER PRIMARY KEY, data TEXT);
+CREATE TABLE effects (id INTEGER PRIMARY KEY, name TEXT, category INTEGER);
+CREATE TABLE type_modifiers (
+  type_id INTEGER, effect_id INTEGER, func TEXT, domain TEXT, modified_attr INTEGER, modifying_attr INTEGER,
+  operation INTEGER, group_id INTEGER, skill_id INTEGER
+);
+CREATE INDEX type_modifiers_type ON type_modifiers (type_id);
+CREATE INDEX type_modifiers_attr ON type_modifiers (modified_attr);
 CREATE TABLE attributes (
   id INTEGER PRIMARY KEY, name TEXT, display_name TEXT, description TEXT, category_id INTEGER,
   unit_id INTEGER, published INTEGER, high_is_good INTEGER, default_value REAL
@@ -174,6 +181,15 @@ export async function buildSde(home: string, build: number, userAgent: string): 
     const meta = ins("INSERT INTO meta_groups VALUES (?,?)");
     await eachLine(zip, entries, "metaGroups.jsonl", (r) => meta.run(r._key, en(r.name)));
 
+    // Dogma effects with their modifiers, so fitting resources can be calculated from the game's own rules.
+    const effects = new Map<number, Row>();
+    const ef = ins("INSERT INTO effects VALUES (?,?,?)");
+    await eachLine(zip, entries, "dogmaEffects.jsonl", (r) => {
+      effects.set(r._key, r);
+      ef.run(r._key, r.name ?? null, r.effectCategoryID ?? null);
+    });
+    const tm = ins("INSERT INTO type_modifiers VALUES (?,?,?,?,?,?,?,?,?)");
+
     // Slot and hardpoint come from dogma effects; collect them before inserting types.
     const slots = new Map<number, string>();
     const hardpoints = new Map<number, string>();
@@ -185,6 +201,13 @@ export async function buildSde(home: string, build: number, userAgent: string): 
         if (slot) slots.set(r._key, slot);
         if (e.effectID === 42) hardpoints.set(r._key, "turret");
         if (e.effectID === 40) hardpoints.set(r._key, "launcher");
+        for (const m of effects.get(e.effectID)?.modifierInfo ?? []) {
+          if (m.modifiedAttributeID == null) continue;
+          tm.run(
+            r._key, e.effectID, m.func ?? null, m.domain ?? null, m.modifiedAttributeID, m.modifyingAttributeID ?? null,
+            m.operation ?? null, m.groupID ?? null, m.skillTypeID ?? null,
+          );
+        }
       }
     });
 

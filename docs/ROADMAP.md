@@ -7,6 +7,20 @@ Notes on work that has been identified but not done yet. Remove an entry once it
 - `ui_action` (set destination, waypoints, open windows) needs the character to be online in the game client.
 - `mail_send` has only been tested on its error path (unknown recipients); no mail has actually been sent.
 
+## Fitting resources and fixes (`fitting_fixes`)
+
+CPU/PG are calculated from SDE dogma modifiers (schema 7) and match Pyfa on the reference fits in
+`src/test/fit-resources.test.ts`. Known gaps:
+
+- Not yet run live with a character's skills applied: ESI returned 502 for the skills route during the first live run.
+  The no-skill path was checked live (Naga Navy Issue: 872 MW used / 689 MW).
+- Implants in the character's head aren't loaded for `fitting_fixes`; only implants in the fit count. eve-fit's `stats`
+  already use them.
+- Per-level hull bonuses are scaled by matching the bonus value against the hull's listed per-skill bonuses (dogma
+  data doesn't scale them); a hull whose bonus value appears under two skills could pick the wrong one.
+- Only skills that change CPU/PG directly are considered; a skill that boosts a fitting module's bonus wouldn't count.
+- No prices on implants/modules yet (the model can call `market_prices`), and the skill plan is greedy, not optimal.
+
 ## Tools without handler tests
 
 The tool-test harness (`src/test/harness.ts`) arrived after most tools. The tools in `UNTESTED` in

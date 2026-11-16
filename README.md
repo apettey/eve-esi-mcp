@@ -49,9 +49,23 @@ An [MCP](https://modelcontextprotocol.io) server for EVE Online's [ESI API](http
 
 The EFT text is also returned as a separate text block, so it can be copied straight into the game ("Import from Clipboard") or into a fitting engine such as Pyfa.
 
+### CPU/powergrid and what to change when a fit doesn't fit
+
+`resources` calculates CPU and powergrid from the game's own dogma rules in the static data: hull and role bonuses (a Naga Navy Issue's launchers need 5% of their listed grid), rigs, fitting modules, implants in the fit and, under `with_character_skills`, the character's trained skills. It matches Pyfa for the reference fits in the tests, including T3 subsystems and per-level hull bonuses, and works for hulls a fitting engine doesn't know yet.
+
+When a fit is over CPU or powergrid for the character, a `fitting_fixes` section lists every change that helps, each calculated with the same rules:
+
+- `skills`: each skill that helps, with the gain and training time for the next level and for level 5 (prerequisites included)
+- `skill_plan`: the quickest set of skill levels that closes the gap, and a note when unallocated SP can pay for it now
+- `implants`: implants that help, with their slot and whether the character can use them
+- `modules`: fitting modules and rigs (Reactor Control Unit, Power Diagnostic System, Ancillary Current Router, ...) and which fitted module or empty slot they would take
+- `cheaper_variants`: variants of fitted modules that need less, with the change to the other resource
+
+Each option is on its own. Swapping modules trades away other stats, so the choice stays with the user.
+
 ### Accurate fit stats with eve-fit
 
-`resources` uses static data only, so skills, rigs and module bonuses aren't applied, and many working fits look over budget there. For engine-accurate numbers, `fitting_get`, `ship_fitting` and `fitting_analyze` can use [eve-fit-mcp](https://github.com/apettey/eve-fit-mcp), a fitting engine built on Pyfa. When eve-fit is configured, each fit also gets a `stats` section with these values:
+For engine-accurate numbers beyond fitting resources, `fitting_get`, `ship_fitting` and `fitting_analyze` can use [eve-fit-mcp](https://github.com/apettey/eve-fit-mcp), a fitting engine built on Pyfa. When eve-fit is configured, each fit also gets a `stats` section with these values:
 
 - offense: DPS and volley (weapons and drones), range and tracking of the main weapon, missile explosion radius and velocity, and a per-weapon-group breakdown
 - defense: EHP per layer and against each single damage type, resists, sustained and burst tank

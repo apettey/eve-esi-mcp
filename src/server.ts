@@ -30,7 +30,9 @@ Prefer the composite tools — they each replace many raw ESI calls:
 - character_overview: location, ship, wallet, SP/training, clones/implants, fatigue, LP in one call.
 - assets (summary | search | ships) and ship_fitting (EFT of an actual ship, default the one being flown).
 - fittings_list / fitting_get / fitting_analyze / fitting_save: fits with module names, slot layout, CPU/PG,
-  attributes, skill check and EFT text. With eve-fit-mcp configured they also include engine \`stats\` (EHP/resists, DPS,
+  attributes, skill check and EFT text. CPU/PG come from the game's dogma rules (hull/role bonuses, rigs, modules,
+  implants, skills); when a fit is over for the character, \`fitting_fixes\` lists the skills (with training time and a
+  plan), implants, fitting modules/rigs and lower-need variants that close the gap. With eve-fit-mcp configured they also include engine \`stats\` (EHP/resists, DPS,
   cap, speed, skill-applied CPU/PG) calculated with the character's real skills.
 - item_info / search_items / skill_check / market_prices / appraise / route_plan / system_info (incl. wormhole class/effect/statics) / wormhole_type / lookup.
 - doctrine_from_killmails / doctrine_from_battle_report: enemy comps (hulls, pilots, loss EFTs, weapons) from zKillboard
