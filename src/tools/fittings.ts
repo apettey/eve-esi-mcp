@@ -33,12 +33,16 @@ const detailParam = z
   .optional()
   .describe("Per-module attribute detail: none, summary (default; fitting-relevant categories) or full.");
 
+/** The character's skills for a skill check, or why they are missing (`skillsNote`, shown instead of the check). */
 async function skillsFor(ctx: Ctx, c: StoredCharacter | undefined, wanted: boolean | undefined) {
-  if (wanted === false || !c || !c.scopes.includes("esi-skills.read_skills.v1")) return undefined;
+  if (wanted === false || !c) return {};
+  if (!c.scopes.includes("esi-skills.read_skills.v1")) {
+    return { skillsNote: `${c.name} has no skills scope: call character_login to re-authorize, then try again.` };
+  }
   try {
-    return await loadSkills(ctx.esi, c);
-  } catch {
-    return undefined;
+    return { skills: await loadSkills(ctx.esi, c) };
+  } catch (err) {
+    return { skillsNote: `Could not load ${c.name}'s skills (${(err as Error).message}); try again shortly.` };
   }
 }
 
@@ -199,14 +203,14 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
       if (!selected.size) {
         throw new UserError(`No saved fittings match ${missing.join(", ")}. ${c.name} has ${all.length} fittings; use fittings_list.`);
       }
-      const skills = await skillsFor(ctx, c, check_skills);
+      const { skills, skillsNote } = await skillsFor(ctx, c, check_skills);
       const rendered: Array<{ fitting_id: number } & ReturnType<typeof renderFit>> = [];
       for (const f of [...selected.values()].slice(0, 10)) {
         const fit = fitFromFlaggedItems(sde, f.name, f.ship_type_id, f.items, f.description);
         rendered.push({
           fitting_id: f.fitting_id,
           ...renderFit(sde, fit, {
-            detail: attributes, skills, characterName: c.name,
+            detail: attributes, skills, skillsNote, characterName: c.name,
             ...(await engineStats(ctx, sde, fit, skills, c, { load: load_cargo_ammo })),
           }),
         });
@@ -278,10 +282,10 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
       const cargo = all.filter((x) => x.flag === "Cargo");
       const name = index.names.get(shipItem.item_id) ?? sde.typeName(shipItem.type_id);
       const fit: Fit = fitFromFlaggedItems(sde, name, shipItem.type_id, contents);
-      const skills = await skillsFor(ctx, c, true);
+      const { skills, skillsNote } = await skillsFor(ctx, c, true);
       const loc = index.roots.get(rootOf(index, shipItem).location_id);
       const rendered = renderFit(sde, fit, {
-        detail: attributes, skills, characterName: c.name,
+        detail: attributes, skills, skillsNote, characterName: c.name,
         ...(await engineStats(ctx, sde, fit, skills, c, { load: load_cargo_ammo, cargo })),
       });
       return reply(
@@ -305,7 +309,9 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
       description:
         "Parses any EFT text (from the user, Pyfa, zKillboard, ...) and returns the same rich breakdown as fitting_get: resolved names, " +
         "resource usage, ship stats/bonuses, module attributes, skill check against a character and DNA, plus engine stats " +
-        "(EHP, DPS, cap, speed, real CPU/PG) when eve-fit is configured, and jump mass + advice for wormhole roller fits. " +
+        "(EHP, DPS, cap, speed) when eve-fit is configured, and jump mass + advice for wormhole roller fits. CPU/PG follow the game's " +
+        "dogma rules with the character's skills; if the fit doesn't fit, fitting_fixes lists skills (training time, a plan), implants, " +
+        "fitting modules/rigs and lower-need variants that close the gap. " +
         "Does not save anything.",
       inputSchema: {
         eft: z.string().describe("EFT text starting with [Ship, Name]."),
@@ -319,9 +325,9 @@ export function registerFittingTools(server: McpServer, ctx: Ctx) {
       const sde = await ctx.sde();
       const { fit, warnings } = parseEft(sde, eft);
       const c = ctx.maybeCharacter(character);
-      const skills = await skillsFor(ctx, c, true);
+      const { skills, skillsNote } = await skillsFor(ctx, c, true);
       const rendered = renderFit(sde, fit, {
-        detail: attributes, skills, characterName: c?.name,
+        detail: attributes, skills, skillsNote, characterName: c?.name,
         ...(await engineStats(ctx, sde, fit, skills, c, { load: load_cargo_ammo })),
       });
       return reply({ warnings: warnings.length ? warnings : undefined, ...rendered }, { texts: [rendered.eft] });

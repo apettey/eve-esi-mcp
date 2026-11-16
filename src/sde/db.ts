@@ -38,6 +38,23 @@ export const ATTR = {
   charisma: 164, intelligence: 165, memory: 166, perception: 167, willpower: 168,
 } as const;
 
+/** One modifier of a dogma effect (see dogmaEffects modifierInfo in the SDE). */
+export interface DogmaModifier {
+  type_id: number;
+  effect_id: number;
+  effect_name: string | null;
+  /** 0 passive, 1 active, 4 online, 5 overload, ... */
+  effect_category: number | null;
+  func: string;
+  domain: string | null;
+  modified_attr: number;
+  modifying_attr: number | null;
+  /** -1 PreAssign, 0 PreMul, 1 PreDiv, 2 ModAdd, 3 ModSub, 4 PostMul, 5 PostDiv, 6 PostPercent, 7 PostAssign. */
+  operation: number;
+  group_id: number | null;
+  skill_id: number | null;
+}
+
 export interface TypeRow {
   id: number;
   name: string;
@@ -140,6 +157,8 @@ export class Sde {
   private attrCategories?: Map<number, string>;
   private typeCache = new Map<number, TypeRow | null>();
   private staticClasses?: Map<string, Set<string>>;
+  private modifierCache = new Map<number, DogmaModifier[]>();
+  private modifyingCache = new Map<string, number[]>();
 
   constructor(path: string) {
     this.db = new DatabaseSync(path, { readOnly: true });
@@ -289,6 +308,31 @@ export class Sde {
   }
 
   // ---------- dogma ----------
+
+  /** Dogma modifiers of a type's effects (what it changes on itself, its ship or the modules fitted with it). */
+  typeModifiers(typeId: number): DogmaModifier[] {
+    let mods = this.modifierCache.get(typeId);
+    if (!mods) {
+      mods = this.q(`SELECT m.*, e.name AS effect_name, e.category AS effect_category
+        FROM type_modifiers m LEFT JOIN effects e ON e.id = m.effect_id WHERE m.type_id = ?`).all(typeId) as unknown as DogmaModifier[];
+      this.modifierCache.set(typeId, mods);
+    }
+    return mods;
+  }
+
+  /** Published types of a category with a modifier on any of these attributes. */
+  typesModifying(categoryId: number, attributeIds: number[]): number[] {
+    const key = `${categoryId}:${attributeIds.join(",")}`;
+    let ids = this.modifyingCache.get(key);
+    if (!ids) {
+      ids = (this.q(`SELECT DISTINCT m.type_id FROM type_modifiers m JOIN types t ON t.id = m.type_id
+        JOIN groups g ON g.id = t.group_id
+        WHERE t.published = 1 AND g.category_id = ? AND m.modified_attr IN (SELECT value FROM json_each(?))
+        ORDER BY m.type_id`).all(categoryId, JSON.stringify(attributeIds)) as any[]).map((r) => r.type_id);
+      this.modifyingCache.set(key, ids);
+    }
+    return ids;
+  }
 
   attributeDefs(): Map<number, AttributeDef> {
     if (!this.attrDefs) {

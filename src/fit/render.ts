@@ -2,6 +2,7 @@ import { ATTR, CATEGORY, type Sde } from "../sde/db.js";
 import { describeRequirements, requirementClosure, skillGaps, type CharacterSkills } from "../skills.js";
 import { round } from "../util.js";
 import { shipSlotCounts, toDna, toEft, type Fit, type SlotKind } from "./model.js";
+import { computeResources, fittingFixes } from "./resources.js";
 import { rollingAnalysis } from "./rolling.js";
 
 export type AttributeDetail = "none" | "summary" | "full";
@@ -25,9 +26,6 @@ const SHIP_SUMMARY_ATTRS = [
   ATTR.maxVelocity, ATTR.agility, ATTR.warpSpeed, ATTR.signatureRadius, ATTR.maxTargetRange, ATTR.scanResolution,
   ATTR.maxLockedTargets, ATTR.droneCapacity, ATTR.droneBandwidth,
 ];
-
-const CPU_MANAGEMENT = 3426;
-const POWER_GRID_MANAGEMENT = 3413;
 
 export function describeShipBonuses(sde: Sde, shipTypeId: number) {
   const b = sde.typeBonus(shipTypeId);
@@ -64,6 +62,8 @@ export function renderFit(
     detail?: AttributeDetail;
     skills?: CharacterSkills;
     characterName?: string;
+    /** Why the character's skills could not be used, when a character was given. */
+    skillsNote?: string;
     /** Engine-calculated stats (see fit/evefit.ts), shown next to the base resources. */
     stats?: Record<string, unknown>;
     /** Why `stats` is missing, when it is. */
@@ -76,7 +76,7 @@ export function renderFit(
   const shipAttrs = sde.typeAttributes(fit.ship_type_id);
 
   const slots: Record<string, Array<{ slot: string; module: string; charge?: string; offline?: boolean }>> = {};
-  let cpu = 0, pg = 0, cal = 0, turrets = 0, launchers = 0;
+  let cal = 0, turrets = 0, launchers = 0;
   const moduleCounts = new Map<number, number>();
   const chargeIds = new Set<number>();
   for (const kind of ["high", "med", "low", "rig", "subsystem", "service"] as SlotKind[]) {
@@ -87,7 +87,6 @@ export function renderFit(
       const m = fit.slots[kind][i];
       if (!m) { slots[kind].push({ slot: `${kind}:${i}`, module: "(empty)" }); continue; }
       const a = sde.typeAttributes(m.type_id);
-      if (!m.offline) { cpu += a.get(ATTR.cpu) ?? 0; pg += a.get(ATTR.power) ?? 0; }
       cal += a.get(ATTR.upgradeCost) ?? 0;
       const t = sde.type(m.type_id);
       if (t?.hardpoint === "turret") turrets++;
@@ -103,8 +102,6 @@ export function renderFit(
     }
   }
 
-  const cpuOut = shipAttrs.get(ATTR.cpuOutput) ?? 0;
-  const pgOut = shipAttrs.get(ATTR.powerOutput) ?? 0;
   const calOut = shipAttrs.get(ATTR.calibration) ?? 0;
   const bandwidthOut = shipAttrs.get(ATTR.droneBandwidth) ?? 0;
   const droneBay = shipAttrs.get(ATTR.droneCapacity) ?? 0;
@@ -122,13 +119,13 @@ export function renderFit(
     available: `${round(out, 2)}${unit ? " " + unit : ""}`,
     percent: out ? round((used / out) * 100, 1) : null,
   });
-  const skill = (id: number) => opts.skills?.levels.get(id)?.active ?? 0;
+  const base = computeResources(sde, fit);
   const resources: Record<string, unknown> = {
     note:
-      "Base values from static data: no skills, rigs or module bonuses applied, so CPU/PG above 100% here is common for fits that " +
-      "work in game (skills like CPU Management and Weapon Upgrades cut usage substantially). Use a fitting engine (e.g. Pyfa) with the EFT for exact stats.",
-    cpu: res(cpu, cpuOut, "tf"),
-    powergrid: res(pg, pgOut, "MW"),
+      "CPU/powergrid from the game's dogma rules: hull and role bonuses, rigs, modules and implants in the fit, with every skill at 0 " +
+      "here (see with_character_skills). Offline modules use nothing.",
+    cpu: res(base.cpu.used, base.cpu.output, "tf"),
+    powergrid: res(base.pg.used, base.pg.output, "MW"),
     calibration: res(cal, calOut, ""),
     turret_hardpoints: `${turrets}/${(shipAttrs.get(ATTR.turretHardpoints) ?? 0) + subsystemTurrets}`,
     launcher_hardpoints: `${launchers}/${(shipAttrs.get(ATTR.launcherHardpoints) ?? 0) + subsystemLaunchers}`,
@@ -138,13 +135,14 @@ export function renderFit(
     resources.drone_bay = res(droneVolume, droneBay, "m3");
   }
   if (fit.cargo.length) resources.cargo = res(cargoVolume, ship?.capacity ?? 0, "m3");
+  let fixes: ReturnType<typeof fittingFixes>;
   if (opts.skills) {
-    const cpuSkilled = cpuOut * (1 + 0.05 * skill(CPU_MANAGEMENT));
-    const pgSkilled = pgOut * (1 + 0.05 * skill(POWER_GRID_MANAGEMENT));
-    resources.with_character_core_skills = {
-      note: `${opts.characterName ?? "Character"}'s CPU Management / Power Grid Management applied to ship output only.`,
-      cpu: res(cpu, cpuSkilled, "tf"),
-      powergrid: res(pg, pgSkilled, "MW"),
+    const skilled = computeResources(sde, fit, { skills: opts.skills });
+    fixes = fittingFixes(sde, fit, opts.skills);
+    resources.with_character_skills = {
+      note: `${opts.characterName ?? "Character"}'s trained skills applied.${fixes ? " Over: see fitting_fixes." : ""}`,
+      cpu: res(skilled.cpu.used, skilled.cpu.output, "tf"),
+      powergrid: res(skilled.pg.used, skilled.pg.output, "MW"),
     };
   }
 
@@ -215,13 +213,14 @@ export function renderFit(
     implants: fit.implants.map((i) => sde.typeName(i)),
     cargo: fit.cargo.map((c) => ({ name: sde.typeName(c.type_id), quantity: c.quantity })),
     resources,
+    ...(fixes ? { fitting_fixes: { character: opts.characterName, ...fixes } } : {}),
     ...(opts.stats ? { stats: opts.stats } : opts.statsNote ? { stats_note: opts.statsNote } : {}),
     rolling: rollingAnalysis(sde, fit),
     modules,
     charges_and_drones: extras,
     skill_check: skillCheck
       ? { character: opts.characterName, ...skillCheck }
-      : { note: "Pass a character (or log one in) to check skills.", skills_required: [...required].map(([id, l]) => `${sde.typeName(id)} ${l}`) },
+      : { note: opts.skillsNote ?? "Pass a character (or log one in) to check skills.", skills_required: [...required].map(([id, l]) => `${sde.typeName(id)} ${l}`) },
     eft: toEft(sde, fit),
     dna: toDna(fit),
   };
